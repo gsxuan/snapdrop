@@ -204,7 +204,15 @@ class Peer {
 
     _onFileReceived(proxyFile) {
         Events.fire('file-received', proxyFile);
-        this.sendJSON({ type: 'transfer-complete' });
+        
+        // 发送传输历史事件
+        const peerName = this._peerId ? document.querySelector('[data-peer-id="' + this._peerId + '"] .name').textContent : '';
+        Events.fire('file-received', {
+            name: proxyFile.name,
+            mime: proxyFile.mime,
+            size: proxyFile.size,
+            peerName: peerName
+        });
     }
 
     _onTransferCompleted() {
@@ -213,16 +221,32 @@ class Peer {
         this._busy = false;
         this._dequeueFile();
         Events.fire('notify-user', 'File transfer completed.');
+        
+        this.sendJSON({ type: 'transfer-complete' });
     }
 
     sendText(text) {
         const unescaped = btoa(unescape(encodeURIComponent(text)));
         this.sendJSON({ type: 'text', text: unescaped });
+        
+        // 发送文本传输历史事件
+        const peerName = this._peerId ? document.querySelector('[data-peer-id="' + this._peerId + '"] .name').textContent : '';
+        Events.fire('text-sent', {
+            text: text,
+            peerName: peerName
+        });
     }
 
     _onTextReceived(message) {
         const escaped = decodeURIComponent(escape(atob(message.text)));
         Events.fire('text-received', { text: escaped, sender: this._peerId });
+        
+        // 发送文本接收历史事件
+        const peerName = this._peerId ? document.querySelector('[data-peer-id="' + this._peerId + '"] .name').textContent : '';
+        Events.fire('text-received', {
+            text: escaped,
+            peerName: peerName
+        });
     }
 }
 

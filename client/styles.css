@@ -3,10 +3,28 @@
 :root {
     --icon-size: 24px;
     --primary-color: #4285f4;
-    --peer-width: 120px;
-    --text-color: #333;
+    --secondary-color: #3367d6;
+    --text-color: rgba(0, 0, 0, 0.87);
+    --text-color-secondary: rgba(0, 0, 0, 0.54);
     --bg-color: #fafafa;
     --bg-color-secondary: #f1f3f4;
+    --background-color: #fafafa;
+    --card-color: #fff;
+    --border-color: #e0e0e0;
+    --shadow-color: rgba(0, 0, 0, 0.15);
+    --icon-color: rgba(0, 0, 0, 0.54);
+}
+
+[data-theme="dark"] {
+    --primary-color: #4285f4;
+    --secondary-color: #3367d6;
+    --text-color: rgba(255, 255, 255, 0.87);
+    --text-color-secondary: rgba(255, 255, 255, 0.54);
+    --background-color: #303030;
+    --card-color: #424242;
+    --border-color: #484848;
+    --shadow-color: rgba(0, 0, 0, 0.3);
+    --icon-color: rgba(255, 255, 255, 0.54);
 }
 
 /* Layout */
@@ -22,13 +40,19 @@ body {
     flex-direction: column;
     width: 100%;
     overflow-x: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, Roboto, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color: var(--text-color);
+    background: var(--background-color);
+    overscroll-behavior: none;
+    overflow: hidden;
 }
 
 body {
     flex-grow: 1;
     align-items: center;
     justify-content: center;
-    overflow-y: hidden;
 }
 
 .row-reverse {
@@ -81,12 +105,6 @@ header {
 
 
 /* Typography */
-
-body {
-    font-family: -apple-system, BlinkMacSystemFont, Roboto, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
 
 h1 {
     font-size: 34px;
@@ -729,5 +747,29 @@ x-dialog x-paper {
     body {
         overflow: hidden;
     }
+}
+
+x-background {
+    position: absolute;
+    height: 100%;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+}
+
+x-paper {
+    padding: 24px;
+    box-sizing: border-box;
+    border-radius: 4px;
+    background: var(--card-color);
+    width: 400px;
+    max-width: 100vw;
+    max-height: 100vh;
+    box-shadow: 0px 4px 8px 0px var(--shadow-color);
+    pointer-events: auto;
+    overflow: auto;
 }
 
