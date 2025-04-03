@@ -13,18 +13,80 @@ process.on('SIGTERM', () => {
 
 const parser = require('ua-parser-js');
 const { uniqueNamesGenerator, animals, colors } = require('unique-names-generator');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// 添加MIME类型映射
+const mimeTypes = {
+    '.html': 'text/html',
+    '.js': 'text/javascript',
+    '.css': 'text/css',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.wav': 'audio/wav',
+    '.mp3': 'audio/mpeg',
+    '.mp4': 'video/mp4',
+    '.woff': 'application/font-woff',
+    '.ttf': 'application/font-ttf',
+    '.eot': 'application/vnd.ms-fontobject',
+    '.otf': 'application/font-otf',
+    '.wasm': 'application/wasm',
+    '.ogg': 'audio/ogg'
+};
 
 class SnapdropServer {
 
     constructor(port) {
+        // 创建HTTP服务器
+        this._httpServer = http.createServer((req, res) => this._handleHttpRequest(req, res));
+        
         const WebSocket = require('ws');
-        this._wss = new WebSocket.Server({ port: port });
+        this._wss = new WebSocket.Server({ 
+            server: this._httpServer,
+            path: '/server' 
+        });
         this._wss.on('connection', (socket, request) => this._onConnection(new Peer(socket, request)));
         this._wss.on('headers', (headers, response) => this._onHeaders(headers, response));
 
         this._rooms = {};
-
-        console.log('Snapdrop is running on port', port);
+        
+        // 启动HTTP服务器
+        this._httpServer.listen(port, () => {
+            console.log('Snapdrop is running on port', port);
+        });
+    }
+    
+    _handleHttpRequest(req, res) {
+        // 默认提供client目录下的文件
+        let filePath = '../client' + req.url;
+        if (req.url === '/' || req.url === '/index.html') {
+            filePath = '../client/index.html';
+        }
+        
+        const extname = String(path.extname(filePath)).toLowerCase();
+        const contentType = mimeTypes[extname] || 'application/octet-stream';
+        
+        fs.readFile(filePath, (error, content) => {
+            if (error) {
+                if(error.code === 'ENOENT') {
+                    // 文件不存在
+                    res.writeHead(404);
+                    res.end('404 Not Found');
+                } else {
+                    // 服务器错误
+                    res.writeHead(500);
+                    res.end('500 Internal Server Error: ' + error.code);
+                }
+            } else {
+                // 成功返回文件内容
+                res.writeHead(200, { 'Content-Type': contentType });
+                res.end(content, 'utf-8');
+            }
+        });
     }
 
     _onConnection(peer) {
