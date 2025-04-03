@@ -382,13 +382,31 @@ class ReceiveTextDialog extends Dialog {
 class Toast extends Dialog {
     constructor() {
         super('toast');
-        Events.on('notify-user', e => this._onNotfiy(e.detail));
+        Events.on('notify-user', (e) => this._onNotify(e.detail));
+        this.$toast = $('toast');
+        this._timeout = null;
     }
 
-    _onNotfiy(message) {
-        this.$el.textContent = message;
+    _onNotify(detail) {
+        // 如果传入的是字符串，则转换为对象格式
+        const message = typeof detail === 'string' ? { message: detail, persistent: false } : detail;
+        
+        // 清除之前的超时
+        if (this._timeout) {
+            clearTimeout(this._timeout);
+            this._timeout = null;
+        }
+        
+        // 更新消息内容
+        this.$toast.textContent = message.message;
+        
+        // 显示消息
         this.show();
-        setTimeout(_ => this.hide(), 3000);
+        
+        // 如果不是常驻消息，则设置超时隐藏
+        if (!message.persistent) {
+            this._timeout = setTimeout(_ => this.hide(), 5000);
+        }
     }
 }
 

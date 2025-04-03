@@ -70,9 +70,39 @@ class ServerConnection {
 
     _onDisconnect() {
         console.log('WS: server disconnected');
-        Events.fire('notify-user', 'Connection lost. Retry in 5 seconds...');
+        
+        // 初始倒计时时间（秒）
+        const countdownTime = 5;
+        let remainingTime = countdownTime;
+        
+        // 发送初始断开连接消息
+        Events.fire('notify-user', {
+            message: `连接已断开，${remainingTime}秒后重试...`,
+            persistent: true
+        });
+        
+        // 设置倒计时定时器
+        const countdownTimer = setInterval(() => {
+            remainingTime--;
+            if (remainingTime <= 0) {
+                clearInterval(countdownTimer);
+                return;
+            }
+            // 更新倒计时消息
+            Events.fire('notify-user', {
+                message: `连接已断开，${remainingTime}秒后重试...`,
+                persistent: true
+            });
+        }, 1000);
+        
+        // 清除之前的重连定时器
         clearTimeout(this._reconnectTimer);
-        this._reconnectTimer = setTimeout(_ => this._connect(), 5000);
+        
+        // 设置重连定时器
+        this._reconnectTimer = setTimeout(_ => {
+            clearInterval(countdownTimer);
+            this._connect();
+        }, countdownTime * 1000);
     }
 
     _onVisibilityChange() {
@@ -220,7 +250,10 @@ class Peer {
         this._reader = null;
         this._busy = false;
         this._dequeueFile();
-        Events.fire('notify-user', 'File transfer completed.');
+        Events.fire('notify-user', {
+            message: '文件传输完成',
+            persistent: false
+        });
         
         this.sendJSON({ type: 'transfer-complete' });
     }
