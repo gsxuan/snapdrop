@@ -5,12 +5,13 @@ class ServerConnection {
 
     constructor() {
         this._connect();
-        Events.on('beforeunload', e => this._disconnect());
-        Events.on('pagehide', e => this._disconnect());
+        Events.on('beforeunload', async e => this._disconnect());
+        Events.on('pagehide', async e => this._disconnect());
         document.addEventListener('visibilitychange', e => this._onVisibilityChange());
         this._connectLossCount = 0;
-        this._fileInfo = {};
+        this._fileInfo = null;
         this._lastBinaryId = null;
+        this.lastSendPeerId = null; // 添加最后发送目标的ID记录
         this._selfId = null; // 存储自己的设备ID
     }
 
@@ -21,12 +22,19 @@ class ServerConnection {
         ws.binaryType = 'arraybuffer';
         ws.onopen = e => {
             console.log('WS: 服务器已连接');
-            // 清除断开连接提示消息
+            // 清除所有断开连接提示消息
             Events.fire('notify-user', {
                 message: '连接已恢复',
                 timeout: 3000,
-                persistent: false
+                persistent: false,
+                type: 'clearAll' // 通知UI清除所有持久性消息
             });
+            
+            // 清除定时器
+            if (this._countdownTimer) {
+                clearInterval(this._countdownTimer);
+                this._countdownTimer = null;
+            }
         };
         ws.onmessage = e => {
             // 处理二进制数据
@@ -131,7 +139,9 @@ class ServerConnection {
             case 'file-chunk-header':
                 // Track current file ID and expected size for binary data
                 const chunkFileId = msg.fileId || msg.sender;
+                const previousId = this._lastBinaryId;
                 this._lastBinaryId = chunkFileId;
+                console.log(`设置_lastBinaryId: ${previousId} -> ${this._lastBinaryId}, 发送者: ${msg.sender}`);
                 
                 // Ensure file info exists
                 if (!this._fileInfo || !this._fileInfo[chunkFileId]) {
@@ -151,11 +161,13 @@ class ServerConnection {
                         data: [],
                         expectedChunkSize: msg.size
                     };
+                    console.log(`为fileKey=${chunkFileId}创建了新的文件信息对象`);
                 } else {
                     // Save chunk info
                     const fileInfo = this._fileInfo[chunkFileId];
                     fileInfo.expectedChunkSize = msg.size;
                     fileInfo.currentChunkIndex = msg.currentChunk;
+                    fileInfo.sender = msg.sender; // 确保发送者ID是最新的
                     
                     // Update offset and size if provided
                     if (msg.offset !== undefined) {
@@ -167,9 +179,10 @@ class ServerConnection {
                     if (msg.totalChunks && !fileInfo.totalChunks) {
                         fileInfo.totalChunks = msg.totalChunks;
                     }
+                    console.log(`更新了fileKey=${chunkFileId}的文件信息`);
                 }
                 
-                console.log(`Expected file chunk, size: ${msg.size} bytes, chunk: ${msg.currentChunk}/${msg.totalChunks}, fileId: ${msg.fileId || 'not specified'}`);
+                console.log(`预期文件块: 大小=${msg.size}字节, 块=${msg.currentChunk}/${msg.totalChunks}, fileId=${msg.fileId || '未指定'}, 发送者=${msg.sender}`);
                 break;
             case 'file-transfer-complete':
                 // Handle file transfer completion
@@ -254,12 +267,26 @@ class ServerConnection {
 
     send(message) {
         if (!this._socket || this._socket.readyState !== WebSocket.OPEN) return;
+        
+        // 如果消息有目标，保存为最后发送的目标ID
+        if (message.to) {
+            this.lastSendPeerId = message.to;
+        }
+        
         this._socket.send(JSON.stringify(message));
     }
 
-    sendBinary(binaryData) {
+    sendBinary(buffer) {
         if (!this._socket || this._socket.readyState !== WebSocket.OPEN) return;
-        this._socket.send(binaryData);
+        
+        // 如果没有目标ID，使用最后一次发送消息的目标ID
+        if (!this.lastSendPeerId) {
+            console.error('Cannot send binary data: No recipient specified');
+            Events.fire('notify-user', '无法发送二进制数据：未指定接收方');
+            return;
+        }
+        
+        this._socket.send(buffer);
     }
 
     _endpoint() {
@@ -333,26 +360,28 @@ class ServerConnection {
         // Process binary data (typically file chunks)
         // Check if we have sender/file ID info
         const fileKey = this._lastBinaryId;
+        console.log(`接收到二进制数据，大小: ${binaryData.byteLength}字节，fileKey: ${fileKey}`);
         if (!fileKey || !this._fileInfo || !this._fileInfo[fileKey]) {
-            console.error('Received binary data but no file info, fileKey:', fileKey);
+            console.error(`没有找到文件信息！lastBinaryId: ${fileKey}, 是否存在fileInfo: ${this._fileInfo ? '是' : '否'}`);
+            console.error(`可用的fileInfo键: ${this._fileInfo ? Object.keys(this._fileInfo).join(', ') : '无'}`);
             return;
         }
         
         // Add data to file info
         const fileInfo = this._fileInfo[fileKey];
         if (!fileInfo) {
-            console.error('File info not found:', fileKey);
+            console.error('文件信息未找到:', fileKey);
             return;
         }
         
         // Skip if file already finalized
         if (fileInfo._finalized) {
-            console.log(`Ignoring extra binary data for ${fileInfo.name}, file already complete`);
+            console.log(`忽略额外的二进制数据，文件 ${fileInfo.name} 已完成`);
             return;
         }
         
         // Log received data
-        console.log(`Received binary data, size: ${binaryData.byteLength} bytes, file: ${fileInfo.name || 'unknown'}, fileId: ${fileInfo.fileId || fileKey}, chunk: ${fileInfo.chunksReceived + 1}/${fileInfo.totalChunks || '?'}`);
+        console.log(`接收到二进制数据: 大小=${binaryData.byteLength}字节, 文件=${fileInfo.name || '未知'}, 发送者=${fileInfo.sender}, fileId=${fileInfo.fileId || fileKey}, 块=${fileInfo.chunksReceived + 1}/${fileInfo.totalChunks || '?'}`);
         
         // Ensure proper number types
         const byteLength = Number(binaryData.byteLength) || 0;
@@ -786,13 +815,33 @@ class PeersManager {
         Events.on('files-selected', e => this._onFilesSelected(e.detail));
         Events.on('send-text', e => this._onSendText(e.detail));
         Events.on('peer-left', e => this._onPeerLeft(e.detail));
+        Events.on('peer-joined', e => this._onPeerJoined(e.detail));
         Events.on('display-name', e => {
             // 保存自己的ID
             if (e.detail && e.detail.message && e.detail.message.peerId) {
+                const oldId = this._selfId;
                 this._selfId = e.detail.message.peerId;
-                console.log('PeersManager: 设置自身ID为', this._selfId);
+                console.log(`PeersManager: 设置自身ID为 ${this._selfId}${oldId ? ` (原ID: ${oldId})` : ''}`);
+                
+                // 更新页面显示元素的自己的设备ID
+                const selfElement = document.getElementById('displayName');
+                if (selfElement) {
+                    selfElement.dataset.selfId = this._selfId;
+                }
             }
         });
+        
+        // 初始化调试辅助函数
+        this._setupDebugHelpers();
+    }
+    
+    // 添加调试辅助函数
+    _setupDebugHelpers() {
+        // 添加全局函数，用于在控制台查看当前peers列表
+        window.showPeersList = () => {
+            console.log("当前Peers列表:", Object.keys(this.peers));
+            return Object.keys(this.peers);
+        };
     }
 
     _onMessage(message) {
@@ -803,17 +852,40 @@ class PeersManager {
     }
 
     _onPeers(peers) {
+        console.log(`收到${peers.length}个对等设备信息:`, peers.map(p => p.id).join(', '));
+        
+        // 当收到空列表时，可能是重新连接，保留现有连接
+        if (peers.length === 0) {
+            console.log('收到空的对等设备列表，保留现有连接');
+            return;
+        }
+        
+        // 创建设备ID映射，用于验证
+        const peerIds = peers.map(p => p.id);
+        console.log('有效的对等设备ID列表:', peerIds);
+        
+        // 移除不在新列表中的旧连接
+        for (const oldPeerId in this.peers) {
+            if (!peerIds.includes(oldPeerId)) {
+                console.log(`移除不再存在的peer连接: ${oldPeerId}`);
+                this._onPeerLeft(oldPeerId);
+            }
+        }
+        
+        // 处理每个对等设备
         peers.forEach(peer => {
             if (this.peers[peer.id]) {
+                console.log(`刷新已存在的peer连接: ${peer.id}`);
                 this.peers[peer.id].refresh();
                 return;
             }
+            console.log(`创建新的peer连接: ${peer.id}, RTC支持: ${window.isRtcSupported && peer.rtcSupported}`);
             if (window.isRtcSupported && peer.rtcSupported) {
                 this.peers[peer.id] = new RTCPeer(this._server, peer.id);
             } else {
                 this.peers[peer.id] = new WSPeer(this._server, peer.id);
             }
-        })
+        });
     }
 
     sendTo(peerId, message) {
@@ -830,9 +902,13 @@ class PeersManager {
             return;
         }
         
+        // 记录目标设备ID
+        console.log(`正在尝试发送文件到设备: ${message.to}`);
+        
         // 尝试查找对应的Peer，如果不存在则创建新的WSPeer
         if (!this.peers[message.to]) {
-            console.log('目标设备未在peers列表中，尝试创建新的WSPeer连接:', message.to);
+            console.log(`目标设备未在peers列表中，尝试创建新的WSPeer连接: ${message.to}`);
+            console.log(`现有的peers: ${Object.keys(this.peers).join(', ')}`);
             this.peers[message.to] = new WSPeer(this._server, message.to);
         }
         
@@ -849,9 +925,13 @@ class PeersManager {
             return;
         }
         
-        // 尝试查找对应的Peer，如果不存在则创建新的WSPeer连接
+        // 记录目标设备ID
+        console.log(`正在尝试发送文本到设备: ${message.to}`);
+        
+        // 尝试查找对应的Peer，如果不存在则创建新的WSPeer
         if (!this.peers[message.to]) {
-            console.log('目标设备未在peers列表中，尝试创建新的WSPeer连接:', message.to);
+            console.log(`目标设备未在peers列表中，尝试创建新的WSPeer连接: ${message.to}`);
+            console.log(`现有的peers: ${Object.keys(this.peers).join(', ')}`);
             this.peers[message.to] = new WSPeer(this._server, message.to);
         }
         
@@ -865,6 +945,21 @@ class PeersManager {
         peer._peer.close();
     }
 
+    _onPeerJoined(peer) {
+        console.log(`收到peer加入事件: ${peer.id}`, peer);
+        // 如果不存在此设备，则创建新连接
+        if (!this.peers[peer.id]) {
+            console.log(`创建新的peer连接(从加入事件): ${peer.id}, RTC支持: ${window.isRtcSupported && peer.rtcSupported}`);
+            if (window.isRtcSupported && peer.rtcSupported) {
+                this.peers[peer.id] = new RTCPeer(this._server, peer.id);
+            } else {
+                this.peers[peer.id] = new WSPeer(this._server, peer.id);
+            }
+        } else {
+            console.log(`更新已存在的peer连接: ${peer.id}`);
+            this.peers[peer.id].refresh();
+        }
+    }
 }
 
 class WSPeer {

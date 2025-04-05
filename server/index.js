@@ -1,14 +1,14 @@
 var process = require('process')
 // Handle SIGINT
 process.on('SIGINT', () => {
-  console.info("SIGINT received, exiting...")
-  process.exit(0)
+  log("SIGINT received, exiting...");
+  process.exit(0);
 })
 
 // Handle SIGTERM
 process.on('SIGTERM', () => {
-  console.info("SIGTERM received, exiting...")
-  process.exit(0)
+  log("SIGTERM received, exiting...");
+  process.exit(0);
 })
 
 const parser = require('ua-parser-js');
@@ -42,6 +42,13 @@ const mimeTypes = {
     '.ogg': 'audio/ogg'
 };
 
+// 添加一个日志函数
+function log(message) {
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    console.log(`[${timestamp}] ${message}`);
+}
+
 class SnapdropServer {
 
     constructor(port) {
@@ -60,7 +67,7 @@ class SnapdropServer {
         
         // 启动HTTP服务器
         this._httpServer.listen(port, () => {
-            console.log('讯传已在端口', port, '上启动');
+            log('讯传已在端口 ' + port + ' 上启动');
         });
     }
     
@@ -101,14 +108,32 @@ class SnapdropServer {
                 // Handle binary data
                 if (message instanceof Buffer) {
                     // Find recipient using last peer ID
-                    if (peer.lastPeerId && this._rooms[peer.ip] && this._rooms[peer.ip][peer.lastPeerId]) {
-                        const recipient = this._rooms[peer.ip][peer.lastPeerId];
-                        if (recipient) {
-                            this._sendBinary(recipient, message);
-                            return;
+                    let recipient = null;
+                    
+                    if (peer.lastPeerId) {
+                        // 首先在同一IP房间中查找
+                        if (this._rooms[peer.ip] && this._rooms[peer.ip][peer.lastPeerId]) {
+                            recipient = this._rooms[peer.ip][peer.lastPeerId];
+                        }
+                        // 如果在同一IP房间中没找到，则在全局房间中查找
+                        else if (this._rooms['global'] && this._rooms['global'][peer.lastPeerId]) {
+                            recipient = this._rooms['global'][peer.lastPeerId];
                         }
                     }
-                    console.log(`Cannot forward binary data, recipient not found`);
+                    
+                    if (recipient) {
+                        this._sendBinary(recipient, message);
+                        return;
+                    }
+                    
+                    // 如果找不到收件人但有最后的peer ID，记录日志但不要重复记录太多
+                    if (peer.lastPeerId && (!peer.lastBinaryErrorTime || (Date.now() - peer.lastBinaryErrorTime) > 5000)) {
+                        log(`无法转发二进制数据，收件人 ${peer.lastPeerId} 未找到`);
+                        peer.lastBinaryErrorTime = Date.now();
+                    } else if (!peer.lastPeerId && (!peer.lastBinaryErrorTime || (Date.now() - peer.lastBinaryErrorTime) > 5000)) {
+                        log(`无法转发二进制数据，收件人未知，请先发送文本消息建立连接`);
+                        peer.lastBinaryErrorTime = Date.now();
+                    }
                     return;
                 }
                 
@@ -123,7 +148,8 @@ class SnapdropServer {
             message: {
                 displayName: peer.name.displayName,
                 deviceName: peer.name.deviceName,
-                peerId: peer.id  // Explicitly send peer ID
+                peerId: peer.id,  // 发送完整的复合ID
+                originalId: peer.originalId // 同时发送原始ID，以便客户端可以使用
             }
         });
         
@@ -136,7 +162,8 @@ class SnapdropServer {
         let hasPeerId = false;
         if (response.headers.cookie) {
             const peerIdMatch = response.headers.cookie.match(/peerid=([^;]+)/);
-            if (peerIdMatch && peerIdMatch[1] && peerIdMatch[1].length < 50) {
+            if (peerIdMatch && peerIdMatch[1] && 
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(peerIdMatch[1])) {
                 hasPeerId = true;
             }
         }
@@ -144,7 +171,8 @@ class SnapdropServer {
         // 如果没有有效的peerid，设置一个新的
         if (!hasPeerId) {
             response.peerId = Peer.uuid();
-            headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure");
+            headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure; Max-Age=2592000"); // 设置30天有效期
+            log('为新客户端设置cookie: ' + response.peerId);
         }
     }
 
@@ -176,9 +204,16 @@ class SnapdropServer {
                 // Relay message to recipient
                 if (message.to && this._rooms[sender.ip]) {
                     const recipientId = message.to; // TODO: sanitize
-                    const recipient = this._rooms[sender.ip][recipientId];
+                    // 首先在同一IP房间中查找
+                    let recipient = this._rooms[sender.ip][recipientId];
+                    
+                    // 如果在同一IP房间中没找到，则在全局房间中查找
+                    if (!recipient && this._rooms['global']) {
+                        recipient = this._rooms['global'][recipientId];
+                    }
+                    
                     if (!recipient) {
-                        console.log(`Recipient ${recipientId} not found`);
+                        log(`收件人 ${recipientId} 未在房间中找到`);
                         return;
                     }
                     
@@ -188,11 +223,26 @@ class SnapdropServer {
                     // Add sender ID
                     msgToSend.sender = sender.id;
                     
-                    // Track peer IDs for binary transfers
+                    // 始终在发送消息前保存对等设备ID，以便处理后续的二进制数据
                     sender.lastPeerId = recipientId;
                     recipient.lastPeerId = sender.id;
                     
-                    console.log(`Forwarding message: ${message.type} from ${sender.id} to ${recipientId}`);
+                    // 只记录第一次和最后一次文件块传输，或者其他类型的消息
+                    const isFileChunkHeader = message.type === 'file-chunk-header';
+                    if (!isFileChunkHeader || 
+                        (isFileChunkHeader && 
+                         (message.currentChunk === 1 || message.currentChunk === message.totalChunks))) {
+                        let status = '';
+                        if (isFileChunkHeader) {
+                            if (message.currentChunk === 1) {
+                                status = '开始';
+                            } else if (message.currentChunk === message.totalChunks) {
+                                status = '最后一块';
+                            }
+                        }
+                        log(`转发消息: ${message.type} ${status} 从 ${sender.id} 到 ${recipientId}`);
+                    }
+                    
                     this._send(recipient, msgToSend);
                     return;
                 }
@@ -200,12 +250,20 @@ class SnapdropServer {
     }
 
     _joinRoom(peer) {
-        // if room doesn't exist, create it
+        // 创建一个全局房间，所有IP地址都能看到所有设备
+        const globalRoomId = 'global';
+        
+        // 为该IP地址创建一个房间（如果不存在）
         if (!this._rooms[peer.ip]) {
             this._rooms[peer.ip] = {};
         }
-
-        // notify all other peers
+        
+        // 为全局房间创建一个映射（如果不存在）
+        if (!this._rooms[globalRoomId]) {
+            this._rooms[globalRoomId] = {};
+        }
+        
+        // 通知IP地址相同房间的所有其他设备
         for (const otherPeerId in this._rooms[peer.ip]) {
             const otherPeer = this._rooms[peer.ip][otherPeerId];
             this._send(otherPeer, {
@@ -213,40 +271,98 @@ class SnapdropServer {
                 peer: peer.getInfo()
             });
         }
-
-        // notify peer about the other peers
+        
+        // 同时通知全局房间的所有其他设备
+        for (const otherPeerId in this._rooms[globalRoomId]) {
+            // 避免重复通知
+            if (this._rooms[peer.ip] && this._rooms[peer.ip][otherPeerId]) continue;
+            
+            const otherPeer = this._rooms[globalRoomId][otherPeerId];
+            this._send(otherPeer, {
+                type: 'peer-joined',
+                peer: peer.getInfo()
+            });
+            
+            // 也通知当前设备关于全局房间中的其他设备
+            this._send(peer, {
+                type: 'peer-joined',
+                peer: otherPeer.getInfo()
+            });
+        }
+        
+        // 通知当前设备关于当前IP房间中的其他设备
         const otherPeers = [];
         for (const otherPeerId in this._rooms[peer.ip]) {
             otherPeers.push(this._rooms[peer.ip][otherPeerId].getInfo());
         }
-
+        
+        // 同时添加全局房间中的其他设备
+        for (const otherPeerId in this._rooms[globalRoomId]) {
+            // 避免重复添加
+            if (this._rooms[peer.ip] && this._rooms[peer.ip][otherPeerId]) continue;
+            
+            otherPeers.push(this._rooms[globalRoomId][otherPeerId].getInfo());
+        }
+        
         this._send(peer, {
             type: 'peers',
             peers: otherPeers
         });
 
-        // add peer to room
+        // 将设备添加到对应IP的房间和全局房间
         this._rooms[peer.ip][peer.id] = peer;
+        this._rooms[globalRoomId][peer.id] = peer;
+        
+        log(`设备 ${peer.id} 加入了房间，IP: ${peer.ip}，全局房间设备数: ${Object.keys(this._rooms[globalRoomId]).length}`);
     }
 
     _leaveRoom(peer) {
-        if (!this._rooms[peer.ip] || !this._rooms[peer.ip][peer.id]) return;
-        this._cancelKeepAlive(this._rooms[peer.ip][peer.id]);
-
-        // delete the peer
-        delete this._rooms[peer.ip][peer.id];
-
+        // 检查IP房间是否存在并包含该设备
+        const isInIpRoom = this._rooms[peer.ip] && this._rooms[peer.ip][peer.id];
+        if (isInIpRoom) {
+            this._cancelKeepAlive(this._rooms[peer.ip][peer.id]);
+            // 从IP房间删除设备
+            delete this._rooms[peer.ip][peer.id];
+        }
+        
+        // 检查全局房间是否存在并包含该设备
+        const globalRoomId = 'global';
+        const isInGlobalRoom = this._rooms[globalRoomId] && this._rooms[globalRoomId][peer.id];
+        if (isInGlobalRoom) {
+            // 从全局房间删除设备
+            delete this._rooms[globalRoomId][peer.id];
+        }
+        
+        // 关闭socket连接
         peer.socket.terminate();
-        //if room is empty, delete the room
-        if (!Object.keys(this._rooms[peer.ip]).length) {
+        
+        // 如果IP房间为空，删除IP房间
+        if (isInIpRoom && !Object.keys(this._rooms[peer.ip]).length) {
             delete this._rooms[peer.ip];
-        } else {
-            // notify all other peers
+        }
+        
+        // 通知所有其他设备
+        // 先通知IP房间中的设备
+        if (isInIpRoom && this._rooms[peer.ip]) {
             for (const otherPeerId in this._rooms[peer.ip]) {
                 const otherPeer = this._rooms[peer.ip][otherPeerId];
                 this._send(otherPeer, { type: 'peer-left', peerId: peer.id });
             }
         }
+        
+        // 再通知全局房间中的设备
+        if (isInGlobalRoom && this._rooms[globalRoomId]) {
+            for (const otherPeerId in this._rooms[globalRoomId]) {
+                // 避免重复通知
+                if (this._rooms[peer.ip] && this._rooms[peer.ip][otherPeerId]) continue;
+                
+                const otherPeer = this._rooms[globalRoomId][otherPeerId];
+                this._send(otherPeer, { type: 'peer-left', peerId: peer.id });
+            }
+        }
+        
+        log(`设备 ${peer.id} 离开了房间，IP: ${peer.ip}，` + 
+            (this._rooms[globalRoomId] ? `全局房间设备数: ${Object.keys(this._rooms[globalRoomId]).length}` : '全局房间已空'));
     }
 
     _send(peer, message) {
@@ -306,6 +422,9 @@ class Peer {
         // 记录最后通信的对等设备ID
         this.lastPeerId = null;
         
+        // 记录最后二进制错误的时间，用于限制错误日志频率
+        this.lastBinaryErrorTime = 0;
+        
         // set name 
         this._setName(request);
         
@@ -315,26 +434,78 @@ class Peer {
     }
 
     _setIP(request) {
-        if (request.headers['x-forwarded-for']) {
-            this.ip = request.headers['x-forwarded-for'].split(/\s*,\s*/)[0];
+        // 获取客户端IP地址
+        let ip;
+        const forwarded = request.headers['x-forwarded-for'];
+        
+        if (forwarded) {
+            // 处理代理服务器转发的情况
+            ip = forwarded.split(/\s*,\s*/)[0];
+        } else if (request.headers['cf-connecting-ip']) {
+            // Cloudflare
+            ip = request.headers['cf-connecting-ip'];
+        } else if (request.headers['x-real-ip']) {
+            // Nginx等代理
+            ip = request.headers['x-real-ip'];
         } else {
-            this.ip = request.connection.remoteAddress;
+            // 直接连接
+            ip = request.connection.remoteAddress;
         }
-        // IPv4 and IPv6 use different values to refer to localhost
-        if (this.ip == '::1' || this.ip == '::ffff:127.0.0.1') {
-            this.ip = '127.0.0.1';
+        
+        // IPv4和IPv6处理本地地址
+        if (ip == '::1' || ip == '::ffff:127.0.0.1' || ip == '127.0.0.1') {
+            ip = '127.0.0.1';
         }
+        
+        log('客户端连接，IP地址: ' + ip);
+        this.ip = ip;
     }
 
     _setPeerId(request) {
+        let peerId = null;
+        
+        // 首先尝试从请求中直接获取
         if (request.peerId) {
-            this.id = request.peerId;
+            peerId = request.peerId;
         } else {
-            // 从cookie中提取纯粹的peerid值，而不是整个cookie字符串
-            const cookies = request.headers.cookie || '';
-            const peerIdMatch = cookies.match(/peerid=([^;]+)/);
-            this.id = peerIdMatch ? peerIdMatch[1] : Peer.uuid();
+            // 否则从cookie中获取
+            try {
+                const cookies = request.headers.cookie || '';
+                const peerIdMatch = cookies.match(/peerid=([^;]+)/);
+                
+                if (peerIdMatch && peerIdMatch[1]) {
+                    // 验证peerid格式是否符合要求（UUID格式）
+                    const potentialId = peerIdMatch[1];
+                    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(potentialId)) {
+                        peerId = potentialId;
+                    } else {
+                        log('发现无效的peerid格式: ' + potentialId + ' 将生成新ID');
+                    }
+                }
+            } catch (e) {
+                console.error('解析cookie时出错:', e);
+            }
         }
+        
+        // 如果没有有效ID，生成一个新的
+        if (!peerId) {
+            peerId = Peer.uuid();
+            log('为客户端生成新ID: ' + peerId);
+        }
+        
+        // 添加设备指纹信息，确保唯一性
+        const userAgent = request.headers['user-agent'] || '';
+        const deviceFingerprint = userAgent + this.ip;
+        const fingerprintHash = deviceFingerprint.hashCode().toString(16);
+        
+        // 保存原始ID，用于日志和调试
+        this.originalId = peerId;
+        
+        // 生成新的复合ID，确保同一设备使用相同ID
+        this.id = peerId + '-' + fingerprintHash.substr(0, 8);
+        
+        // 记录设备ID分配情况
+        log(`设备ID分配: ${this.id} (原始ID: ${this.originalId}, 指纹: ${fingerprintHash.substr(0, 8)})`);
     }
 
     toString() {
@@ -360,8 +531,10 @@ class Peer {
             deviceName = '未知设备';
 
         // 使用中文名称
-        const colorIndex = Math.abs(this.id.hashCode() % chineseColors.length);
-        const animalIndex = Math.abs((this.id.hashCode() >> 4) % chineseAnimals.length);
+        // 使用完整的ID（包括设备指纹）来计算哈希，确保名称唯一性
+        const fullId = this.id || '';
+        const colorIndex = Math.abs(fullId.hashCode() % chineseColors.length);
+        const animalIndex = Math.abs((fullId.hashCode() >> 4) % chineseAnimals.length);
         const displayName = chineseColors[colorIndex] + chineseAnimals[animalIndex];
 
         this.name = {
