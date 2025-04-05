@@ -9,7 +9,7 @@ window.iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 Events.on('display-name', e => {
     const me = e.detail.message;
     const $displayName = $('displayName')
-    $displayName.textContent = 'You are known as ' + me.displayName;
+    $displayName.textContent = '您的名称为 ' + me.displayName;
     $displayName.title = me.deviceName;
 });
 
@@ -77,7 +77,7 @@ class PeerUI {
             <label class="column center" title="Click to send files or right click to send a text">
                 <input type="file" multiple>
                 <x-icon shadow="1">
-                    <svg class="icon"><use xlink:href="#"/></svg>
+                    <svg class="icon" viewBox="0 0 24 24">${this._iconPath()}</svg>
                 </x-icon>
                 <div class="progress">
                   <div class="circle"></div>
@@ -100,7 +100,6 @@ class PeerUI {
         el.id = this._peer.id;
         el.innerHTML = this.html();
         el.ui = this;
-        el.querySelector('svg use').setAttribute('xlink:href', this._icon());
         el.querySelector('.name').textContent = this._displayName();
         el.querySelector('.device-name').textContent = this._deviceName();
         this.$el = el;
@@ -129,23 +128,36 @@ class PeerUI {
         return this._peer.name.deviceName;
     }
 
-    _icon() {
+    _iconPath() {
         const device = this._peer.name.device || this._peer.name;
         if (device.type === 'mobile') {
-            return '#phone-iphone';
+            return '<path d="M15.5 1h-8C6.12 1 5 2.12 5 3.5v17C5 21.88 6.12 23 7.5 23h8c1.38 0 2.5-1.12 2.5-2.5v-17C18 2.12 16.88 1 15.5 1zm-4 21c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4.5-4H7V4h9v14z"></path>';
         }
         if (device.type === 'tablet') {
-            return '#tablet-mac';
+            return '<path d="M18.5 0h-14C3.12 0 2 1.12 2 2.5v19C2 22.88 3.12 24 4.5 24h14c1.38 0 2.5-1.12 2.5-2.5v-19C21 1.12 19.88 0 18.5 0zm-7 23c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm7.5-4H4V3h15v16z"></path>';
         }
-        return '#desktop-mac';
+        return '<path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 12H3V4h18v10z"></path>';
+    }
+
+    _icon() {
+        return '';
     }
 
     _onFilesSelected(e) {
         const $input = e.target;
         const files = $input.files;
+        const targetId = this.$el.id;
+        if (!targetId) {
+            console.error('无法确定目标设备ID');
+            Events.fire('notify-user', {
+                message: '发送失败：无法确定目标设备',
+                timeout: 3000
+            });
+            return;
+        }
         Events.fire('files-selected', {
             files: files,
-            to: this._peer.id
+            to: targetId
         });
         $input.value = null; // reset input
     }
@@ -170,9 +182,19 @@ class PeerUI {
     _onDrop(e) {
         e.preventDefault();
         const files = e.dataTransfer.files;
+        // 使用元素ID作为目标设备ID
+        const targetId = this.$el.id;
+        if (!targetId) {
+            console.error('无法确定目标设备ID');
+            Events.fire('notify-user', {
+                message: '发送失败：无法确定目标设备',
+                timeout: 3000
+            });
+            return;
+        }
         Events.fire('files-selected', {
             files: files,
-            to: this._peer.id
+            to: targetId
         });
         this._onDragEnd();
     }
@@ -231,7 +253,6 @@ class ReceiveDialog extends Dialog {
         super('receiveDialog');
         Events.on('file-received', e => {
             this._nextFile(e.detail);
-            window.blop.play();
         });
         this._filesQueue = [];
     }
@@ -257,31 +278,54 @@ class ReceiveDialog extends Dialog {
     }
 
     _displayFile(file) {
-        const $a = this.$el.querySelector('#download');
-        const url = URL.createObjectURL(file.blob);
-        $a.href = url;
-        $a.download = file.name;
-
-        if(this._autoDownload()){
-            $a.click()
-            return
+        // 尝试播放声音（在用户交互的上下文中）
+        try {
+            window.blop.play().catch(e => console.log('无法播放提示音:', e));
+        } catch (error) {
+            console.log('播放提示音时出错');
         }
-        if(file.mime.split('/')[0] === 'image'){
-            console.log('the file is image');
-            this.$el.querySelector('.preview').style.visibility = 'inherit';
-            this.$el.querySelector("#img-preview").src = url;
-        }
-
+        
+        // 显示文件信息
         this.$el.querySelector('#fileName').textContent = file.name;
         this.$el.querySelector('#fileSize').textContent = this._formatFileSize(file.size);
+        
+        // 创建URL对象
+        const url = URL.createObjectURL(file.blob);
+        const $a = this.$el.querySelector('#download');
+        $a.href = url;
+        $a.download = file.name;
+        
+        // 自动下载检查
+        if(this._autoDownload()){
+            $a.click();
+            this._dequeueFile();
+            return;
+        }
+        
+        // 只有图片才显示预览
+        if (file.mime.split('/')[0] === 'image') {
+            this.$el.querySelector('.preview').style.visibility = 'visible';
+            this.$el.querySelector('#img-preview').src = url;
+        } else {
+            this.$el.querySelector('.preview').style.visibility = 'hidden';
+        }
+        
+        // 显示对话框
         this.show();
-
-        if (window.isDownloadSupported) return;
-        // fallback for iOS
-        $a.target = '_blank';
-        const reader = new FileReader();
-        reader.onload = e => $a.href = reader.result;
-        reader.readAsDataURL(file.blob);
+        
+        // iOS下载兼容
+        if (!window.isDownloadSupported) {
+            // fallback for iOS
+            $a.target = '_blank';
+            const reader = new FileReader();
+            reader.onload = e => $a.href = reader.result;
+            reader.readAsDataURL(file.blob);
+        }
+        
+        Events.fire('file-progress', {
+            sender: file.sender,
+            progress: 1
+        });
     }
 
     _formatFileSize(bytes) {
@@ -313,38 +357,64 @@ class ReceiveDialog extends Dialog {
 class SendTextDialog extends Dialog {
     constructor() {
         super('sendTextDialog');
-        Events.on('text-recipient', e => this._onRecipient(e.detail))
-        this.$text = this.$el.querySelector('#textInput');
-        const button = this.$el.querySelector('form');
-        button.addEventListener('submit', e => this._send(e));
-    }
+        const textInput = $('textInput');
+        const sendButton = this.$el.querySelector('button[type="submit"]');
+        this._targetPeerId = null;
 
-    _onRecipient(recipient) {
-        this._recipient = recipient;
-        this._handleShareTargetText();
-        this.show();
-
-        const range = document.createRange();
-        const sel = window.getSelection();
-
-        range.selectNodeContents(this.$text);
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-    }
-
-    _handleShareTargetText() {
-        if (!window.shareTargetText) return;
-        this.$text.textContent = window.shareTargetText;
-        window.shareTargetText = '';
-    }
-
-    _send(e) {
-        e.preventDefault();
-        Events.fire('send-text', {
-            to: this._recipient,
-            text: this.$text.innerText
+        Events.on('text-recipient', e => this._onRecipient(e.detail));
+        
+        textInput.addEventListener('paste', e => this._onPaste(e));
+        
+        textInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendButton.click();
+            }
         });
+
+        this.$el.querySelector('form').addEventListener('submit', e => {
+            e.preventDefault();
+            if (!this._targetPeerId) {
+                console.error('没有指定接收方');
+                Events.fire('notify-user', {
+                    message: '发送失败：未指定接收方',
+                    timeout: 3000
+                });
+                return;
+            }
+            this._send();
+        });
+    }
+
+    _onRecipient(peerId) {
+        this._targetPeerId = peerId;
+        this.show();
+        const textInput = $('textInput');
+        textInput.focus();
+    }
+
+    _send() {
+        const textInput = $('textInput');
+        if (textInput.textContent.length === 0) return;
+        Events.fire('send-text', {
+            to: this._targetPeerId,
+            text: textInput.textContent
+        });
+        textInput.textContent = '';
+        this.hide();
+    }
+
+    _onPaste(e) {
+        if (!e.clipboardData.items) return;
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') === -1) continue;
+            const file = items[i].getAsFile();
+            Events.fire('files-selected', {
+                files: [file],
+                to: this._targetPeerId
+            });
+        }
     }
 }
 
@@ -370,12 +440,20 @@ class ReceiveTextDialog extends Dialog {
             this.$text.textContent = text;
         }
         this.show();
-        window.blop.play();
+        
+        // 尝试播放音频，但捕获可能的错误
+        try {
+            window.blop.play().catch(err => {
+                console.log('无法播放通知音: ' + err.message);
+            });
+        } catch (error) {
+            console.log('播放音频错误');
+        }
     }
 
     async _onCopy() {
         await navigator.clipboard.writeText(this.$text.textContent);
-        Events.fire('notify-user', 'Copied to clipboard');
+        Events.fire('notify-user', '已复制到剪贴板');
     }
 }
 
@@ -430,10 +508,10 @@ class Notifications {
     _requestPermission() {
         Notification.requestPermission(permission => {
             if (permission !== 'granted') {
-                Events.fire('notify-user', Notifications.PERMISSION_ERROR || 'Error');
+                Events.fire('notify-user', Notifications.PERMISSION_ERROR || '错误');
                 return;
             }
-            this._notify('Even more snappy sharing!');
+            this._notify('更便捷的分享体验!');
             this.$button.setAttribute('hidden', 1);
         });
     }
@@ -467,10 +545,10 @@ class Notifications {
     _messageNotification(message) {
         if (document.visibilityState !== 'visible') {
             if (isURL(message)) {
-                const notification = this._notify(message, 'Click to open link');
+                const notification = this._notify(message, '点击打开链接');
                 this._bind(notification, e => window.open(message, '_blank', null, true));
             } else {
-                const notification = this._notify(message, 'Click to copy text');
+                const notification = this._notify(message, '点击复制文本');
                 this._bind(notification, e => this._copyText(message, notification));
             }
         }
@@ -478,7 +556,7 @@ class Notifications {
 
     _downloadNotification(message) {
         if (document.visibilityState !== 'visible') {
-            const notification = this._notify(message, 'Click to download');
+            const notification = this._notify(message, '点击下载');
             if (!window.isDownloadSupported) return;
             this._bind(notification, e => this._download(notification));
         }
@@ -492,7 +570,7 @@ class Notifications {
     _copyText(message, notification) {
         notification.close();
         if (!navigator.clipboard.writeText(message)) return;
-        this._notify('Copied text to clipboard');
+        this._notify('已复制文本到剪贴板');
     }
 
     _bind(notification, handler) {
@@ -516,11 +594,11 @@ class NetworkStatusUI {
     }
 
     _showOfflineMessage() {
-        Events.fire('notify-user', 'You are offline');
+        Events.fire('notify-user', '您已离线');
     }
 
     _showOnlineMessage() {
-        Events.fire('notify-user', 'You are back online');
+        Events.fire('notify-user', '您已重新连接');
     }
 }
 
@@ -650,10 +728,9 @@ Events.on('load', () => {
 });
 
 Notifications.PERMISSION_ERROR = `
-Notifications permission has been blocked
-as the user has dismissed the permission prompt several times.
-This can be reset in Page Info
-which can be accessed by clicking the lock icon next to the URL.`;
+通知权限已被阻止，因为您多次忽略权限提示。
+您可以通过点击URL旁边的锁定图标，在页面信息中重置此设置。
+`;
 
 document.body.onclick = e => { // safari hack to fix audio
     document.body.onclick = null;

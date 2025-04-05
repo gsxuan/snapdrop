@@ -1,13 +1,13 @@
 var process = require('process')
 // Handle SIGINT
 process.on('SIGINT', () => {
-  console.info("SIGINT Received, exiting...")
+  console.info("SIGINT收到，正在退出...")
   process.exit(0)
 })
 
 // Handle SIGTERM
 process.on('SIGTERM', () => {
-  console.info("SIGTERM Received, exiting...")
+  console.info("SIGTERM收到，正在退出...")
   process.exit(0)
 })
 
@@ -16,6 +16,10 @@ const { uniqueNamesGenerator, animals, colors } = require('unique-names-generato
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+
+// 中文名称字典
+const chineseColors = ['红', '橙', '黄', '绿', '青', '蓝', '紫', '黑', '白', '金', '银', '灰'];
+const chineseAnimals = ['猫', '狗', '龙', '虎', '兔', '鼠', '牛', '马', '羊', '猴', '鸡', '蛇', '猪', '鹿', '象', '鹰', '鸭', '熊', '狼', '鱼'];
 
 // 添加MIME类型映射
 const mimeTypes = {
@@ -56,15 +60,15 @@ class SnapdropServer {
         
         // 启动HTTP服务器
         this._httpServer.listen(port, () => {
-            console.log('Snapdrop is running on port', port);
+            console.log('讯传已在端口', port, '上启动');
         });
     }
     
     _handleHttpRequest(req, res) {
         // 默认提供client目录下的文件
-        let filePath = '../client' + req.url;
+        let filePath = path.join(__dirname, '../client', req.url);
         if (req.url === '/' || req.url === '/index.html') {
-            filePath = '../client/index.html';
+            filePath = path.join(__dirname, '../client/index.html');
         }
         
         const extname = String(path.extname(filePath)).toLowerCase();
@@ -75,11 +79,11 @@ class SnapdropServer {
                 if(error.code === 'ENOENT') {
                     // 文件不存在
                     res.writeHead(404);
-                    res.end('404 Not Found');
+                    res.end('404 未找到');
                 } else {
                     // 服务器错误
                     res.writeHead(500);
-                    res.end('500 Internal Server Error: ' + error.code);
+                    res.end('500 服务器错误: ' + error.code);
                 }
             } else {
                 // 成功返回文件内容
@@ -90,25 +94,58 @@ class SnapdropServer {
     }
 
     _onConnection(peer) {
-        this._joinRoom(peer);
-        peer.socket.on('message', message => this._onMessage(peer, message));
-        peer.socket.on('error', console.error);
-        this._keepAlive(peer);
-
-        // send displayName
+        if (peer.rtcSupported) {
+            peer.socket.on('message', message => this._onRtcMessage(peer, message));
+        } else {
+            peer.socket.on('message', message => {
+                // 处理二进制数据
+                if (message instanceof Buffer) {
+                    // 如果有最后的对等设备ID，用它来查找接收者
+                    if (peer.lastPeerId && this._rooms[peer.ip] && this._rooms[peer.ip][peer.lastPeerId]) {
+                        const recipient = this._rooms[peer.ip][peer.lastPeerId];
+                        if (recipient) {
+                            this._sendBinary(recipient, message);
+                            return;
+                        }
+                    }
+                    console.log(`无法转发二进制数据，找不到接收者`);
+                    return;
+                }
+                
+                // 处理文本消息
+                this._onMessage(peer, message);
+            });
+        }
+        
+        // 发送欢迎信息给新连接的对等设备
         this._send(peer, {
             type: 'display-name',
             message: {
                 displayName: peer.name.displayName,
-                deviceName: peer.name.deviceName
+                deviceName: peer.name.deviceName,
+                peerId: peer.id  // 明确发送对等设备ID
             }
         });
+        
+        this._joinRoom(peer);
+        this._keepAlive(peer);
     }
 
     _onHeaders(headers, response) {
-        if (response.headers.cookie && response.headers.cookie.indexOf('peerid=') > -1) return;
-        response.peerId = Peer.uuid();
-        headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure");
+        // 检查是否已经有效的peerid cookie
+        let hasPeerId = false;
+        if (response.headers.cookie) {
+            const peerIdMatch = response.headers.cookie.match(/peerid=([^;]+)/);
+            if (peerIdMatch && peerIdMatch[1] && peerIdMatch[1].length < 50) {
+                hasPeerId = true;
+            }
+        }
+        
+        // 如果没有有效的peerid，设置一个新的
+        if (!hasPeerId) {
+            response.peerId = Peer.uuid();
+            headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure");
+        }
     }
 
     _onMessage(sender, message) {
@@ -126,17 +163,39 @@ class SnapdropServer {
             case 'pong':
                 sender.lastBeat = Date.now();
                 break;
-        }
-
-        // relay message to recipient
-        if (message.to && this._rooms[sender.ip]) {
-            const recipientId = message.to; // TODO: sanitize
-            const recipient = this._rooms[sender.ip][recipientId];
-            delete message.to;
-            // add sender id
-            message.sender = sender.id;
-            this._send(recipient, message);
-            return;
+            case 'file':
+            case 'file-chunk':
+            case 'file-chunk-header':
+            case 'file-transfer-complete':
+            case 'file-received-feedback':
+            case 'text':
+                // 文件、文件块、文件传输完成、文件接收反馈和文本消息需要添加发送者信息
+                message.sender = sender.id;
+                // 转发到接收者，继续执行下面的中继逻辑
+            default:
+                // relay message to recipient
+                if (message.to && this._rooms[sender.ip]) {
+                    const recipientId = message.to; // TODO: sanitize
+                    const recipient = this._rooms[sender.ip][recipientId];
+                    if (!recipient) {
+                        console.log(`接收者 ${recipientId} 不存在`);
+                        return;
+                    }
+                    
+                    // 复制消息以避免修改原始对象
+                    const msgToSend = JSON.parse(JSON.stringify(message));
+                    delete msgToSend.to;
+                    // 添加发送者ID
+                    msgToSend.sender = sender.id;
+                    
+                    // 记录通信对等设备ID，供二进制传输使用
+                    sender.lastPeerId = recipientId;
+                    recipient.lastPeerId = sender.id;
+                    
+                    console.log(`转发消息: ${message.type} 从 ${sender.id} 到 ${recipientId}`);
+                    this._send(recipient, msgToSend);
+                    return;
+                }
         }
     }
 
@@ -197,6 +256,12 @@ class SnapdropServer {
         peer.socket.send(message, error => '');
     }
 
+    _sendBinary(peer, binaryData) {
+        if (!peer) return;
+        if (this._wss.readyState !== this._wss.OPEN) return;
+        peer.socket.send(binaryData, error => '');
+    }
+
     _keepAlive(peer) {
         this._cancelKeepAlive(peer);
         var timeout = 30000;
@@ -233,11 +298,17 @@ class Peer {
         this._setIP(request);
 
         // set peer id
-        this._setPeerId(request)
+        this._setPeerId(request);
+        
         // is WebRTC supported ?
         this.rtcSupported = request.url.indexOf('webrtc') > -1;
+        
+        // 记录最后通信的对等设备ID
+        this.lastPeerId = null;
+        
         // set name 
         this._setName(request);
+        
         // for keepalive
         this.timerId = 0;
         this.lastBeat = Date.now();
@@ -259,7 +330,10 @@ class Peer {
         if (request.peerId) {
             this.id = request.peerId;
         } else {
-            this.id = request.headers.cookie.replace('peerid=', '');
+            // 从cookie中提取纯粹的peerid值，而不是整个cookie字符串
+            const cookies = request.headers.cookie || '';
+            const peerIdMatch = cookies.match(/peerid=([^;]+)/);
+            this.id = peerIdMatch ? peerIdMatch[1] : Peer.uuid();
         }
     }
 
@@ -269,7 +343,6 @@ class Peer {
 
     _setName(req) {
         let ua = parser(req.headers['user-agent']);
-
 
         let deviceName = '';
         
@@ -284,15 +357,12 @@ class Peer {
         }
 
         if(!deviceName)
-            deviceName = 'Unknown Device';
+            deviceName = '未知设备';
 
-        const displayName = uniqueNamesGenerator({
-            length: 2,
-            separator: ' ',
-            dictionaries: [colors, animals],
-            style: 'capital',
-            seed: this.id.hashCode()
-        })
+        // 使用中文名称
+        const colorIndex = Math.abs(this.id.hashCode() % chineseColors.length);
+        const animalIndex = Math.abs((this.id.hashCode() >> 4) % chineseAnimals.length);
+        const displayName = chineseColors[colorIndex] + chineseAnimals[animalIndex];
 
         this.name = {
             model: ua.device.model,
