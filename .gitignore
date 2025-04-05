@@ -2,3 +2,6 @@ node_modules
 .DS_Store
 fqdn.env
 /docker/certs
+server.log
+server.pid
+.server.pid
