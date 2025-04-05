@@ -1,18 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="utf-8">
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <!-- Web App Config -->
-    <title>Snapdrop</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#3367d6">
-    <meta name="color-scheme" content="dark light">
-    <meta name="apple-mobile-web-app-capable" content="no">
-    <meta name="apple-mobile-web-app-title" content="Snapdrop">
-    <!-- Descriptions -->
-    <meta name="description" content="Instantly share images, videos, PDFs, and links with people nearby. Peer2Peer and Open Source. No Setup, No Signup.">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="description" content="跨设备传输数据的最简单方式。无需安装应用或设置帐户，一切都在浏览器中工作">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="讯传">
+    <meta name="application-name" content="讯传">
+    <meta name="msapplication-TileColor" content="#4285f4">
+    <meta name="theme-color" content="#4285f4">
+    <meta name="referrer" content="no-referrer">
+    <title>讯传 - 跨设备传输数据的最简单方式</title>
     <meta name="keywords" content="File, Transfer, Share, Peer2Peer">
     <meta name="author" content="RobinLinus">
     <meta property="og:title" content="Snapdrop">
@@ -38,58 +40,38 @@
 
 <body translate="no">
     <header class="row-reverse">
-        <a href="#about" class="icon-button" title="About Snapdrop" data-i18n-attr="title:header.about">
-            <svg class="icon">
-                <use xlink:href="#info-outline" />
-            </svg>
-        </a>
-        <a href="#" id="theme-toggle" class="icon-button" title="Toggle Theme" data-i18n-attr="title:header.toggle_theme">
-            <svg class="icon" id="theme-icon">
-                <use xlink:href="#dark-mode" />
-            </svg>
-        </a>
-        <a href="#" id="notification" class="icon-button" title="Enable Notifications" data-i18n-attr="title:header.enable_notifications" hidden>
-            <svg class="icon">
-                <use xlink:href="#notifications" />
-            </svg>
-        </a>
-        <a href="#" id="install" class="icon-button" title="Install Snapdrop" data-i18n-attr="title:header.install" hidden>
-            <svg class="icon">
-                <use xlink:href="#homescreen" />
-            </svg>
-        </a>
     </header>
     <!-- Peers -->
     <x-peers class="center"></x-peers>
     <x-no-peers>
-        <h2 data-i18n="main.no_peers">Open Snapdrop on other devices to send files</h2>
+        <h2>在其他设备上打开讯传以发送文件</h2>
     </x-no-peers>
-    <x-instructions desktop="Click to send files or right click to send a message" mobile="Tap to send files or long tap to send a message" data-i18n-attr="desktop:main.instructions_desktop;mobile:main.instructions_mobile"></x-instructions>
+    <x-instructions desktop="点击发送文件或右键点击发送消息" mobile="点击发送文件或长按发送消息"></x-instructions>
     <!-- Footer -->
     <footer class="column">
         <svg class="icon logo">
             <use xlink:href="#wifi-tethering" />
         </svg>
-        <div id="displayName" placeholder="The easiest way to transfer data across devices" data-i18n="main.display_name_placeholder"></div>
-        <div class="font-body2" data-i18n="main.network_info">You can be discovered by everyone on this network</div>
+        <div id="displayName" placeholder="跨设备传输数据的最简单方式"></div>
+        <div class="font-body2">此网络中的所有人都能发现您</div>
     </footer>
     <!-- Receive Dialog -->
     <x-dialog id="receiveDialog">
         <x-background class="full center">
             <x-paper shadow="2">
-                <h3 data-i18n="dialogs.file_received">File Received</h3>
-                <div class="font-subheading" id="fileName" data-i18n="dialogs.file_name">Filename</div>
+                <h3>收到文件</h3>
+                <div class="font-subheading" id="fileName">文件名</div>
                 <div class="font-body2" id="fileSize"></div>
                 <div class='preview' style="visibility: hidden;">
                     <img id='img-preview' src="">
                 </div>
                 <div class="row">
-                    <label for="autoDownload" class="grow" data-i18n="dialogs.ask_save">Ask to save each file before downloading</label>
+                    <label for="autoDownload" class="grow">下载前询问是否保存每个文件</label>
                     <input type="checkbox" id="autoDownload" checked="">
                 </div>
                 <div class="row-reverse">
-                    <a class="button" close id="download" title="Download File" data-i18n="dialogs.save" data-i18n-attr="title:dialogs.save" autofocus>Save</a>
-                    <button class="button" close data-i18n="dialogs.ignore">Ignore</button>
+                    <a class="button" close id="download" title="保存" autofocus>保存</a>
+                    <button class="button" close>忽略</button>
                 </div>
             </x-paper>
         </x-background>
@@ -99,11 +81,11 @@
         <form action="#">
             <x-background class="full center">
                 <x-paper shadow="2">
-                    <h3 data-i18n="dialogs.send_message">Send a Message</h3>
-                    <div id="textInput" class="textarea" role="textbox" placeholder="Send a message" autocomplete="off" autofocus contenteditable></div>
+                    <h3>发送消息</h3>
+                    <div id="textInput" class="textarea" role="textbox" placeholder="发送消息" autocomplete="off" autofocus contenteditable></div>
                     <div class="row-reverse">
-                        <button class="button" type="submit" close data-i18n="dialogs.send">Send</button>
-                        <a class="button" close data-i18n="dialogs.cancel">Cancel</a>
+                        <button class="button" type="submit" close>发送</button>
+                        <a class="button" close>取消</a>
                     </div>
                 </x-paper>
             </x-background>
@@ -113,18 +95,18 @@
     <x-dialog id="receiveTextDialog">
         <x-background class="full center">
             <x-paper shadow="2">
-                <h3 data-i18n="dialogs.message_received">Message Received</h3>
+                <h3>收到消息</h3>
                 <div class="font-subheading" id="text"></div>
                 <div class="row-reverse">
-                    <button class="button" id="copy" close autofocus data-i18n="dialogs.copy">Copy</button>
-                    <button class="button" close data-i18n="dialogs.close">Close</button>
+                    <button class="button" id="copy" close autofocus>复制</button>
+                    <button class="button" close>关闭</button>
                 </div>
             </x-paper>
         </x-background>
     </x-dialog>
     <!-- Toast -->
     <div class="toast-container full center">
-        <x-toast class="row" shadow="1" id="toast" data-i18n="dialogs.file_transfer">File Transfer Completed</x-toast>
+        <x-toast class="row" shadow="1" id="toast">文件传输完成</x-toast>
     </div>
     <!-- About Page -->
     <x-about id="about" class="full center column">
@@ -139,25 +121,25 @@
             <svg class="icon logo">
                 <use xlink:href="#wifi-tethering" />
             </svg>
-            <h1>Snapdrop</h1>
-            <div class="font-subheading" data-i18n="about.tagline">The easiest way to transfer files across devices</div>
+            <h1>讯传</h1>
+            <div class="font-subheading">跨设备传输数据的最简单方式</div>
             <div class="row">
-                <a class="icon-button" target="_blank" href="https://github.com/RobinLinus/snapdrop" title="Snapdrop on Github" data-i18n-attr="title:about.github" rel="noreferrer">
+                <a class="icon-button" target="_blank" href="https://github.com/RobinLinus/snapdrop" title="GitHub" rel="noreferrer">
                     <svg class="icon">
                         <use xlink:href="#github" />
                     </svg>
                 </a>
-                <a class="icon-button" target="_blank" href="https://www.paypal.com/donate?hosted_button_id=FTP9DXUR7LA7Q" title="Help cover the server costs!" data-i18n-attr="title:about.donate" rel="noreferrer">
+                <a class="icon-button" target="_blank" href="https://www.paypal.com/donate?hosted_button_id=FTP9DXUR7LA7Q" title="帮助支付服务器费用！" rel="noreferrer">
                     <svg class="icon">
                         <use xlink:href="#monetarization" />
                     </svg>
                 </a>
-                <a class="icon-button" target="_blank" href="https://twitter.com/intent/tweet?text=https://snapdrop.net%20by%20@robin_linus%20&" title="Tweet about Snapdrop" data-i18n-attr="title:about.tweet" rel="noreferrer">
+                <a class="icon-button" target="_blank" href="https://twitter.com/intent/tweet?text=https://snapdrop.net%20by%20@robin_linus%20&" title="在Twitter上分享讯传" rel="noreferrer">
                     <svg class="icon">
                         <use xlink:href="#twitter" />
                     </svg>
                 </a>
-                <a class="icon-button" target="_blank" href="https://github.com/RobinLinus/snapdrop/blob/master/docs/faq.md" title="Frequently asked questions" data-i18n-attr="title:about.faq" rel="noreferrer">
+                <a class="icon-button" target="_blank" href="https://github.com/RobinLinus/snapdrop/blob/master/docs/faq.md" title="常见问题" rel="noreferrer">
                     <svg class="icon">
                         <use xlink:href="#help-outline" />
                     </svg>
@@ -241,9 +223,6 @@
     <!-- Scripts -->
     <script src="scripts/network.js"></script>
     <script src="scripts/ui.js"></script>
-    <script src="scripts/ui-enhancements.js"></script>
-    <script src="scripts/localization.js"></script>
-    <script src="scripts/transfer-history.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/service-worker.js')
