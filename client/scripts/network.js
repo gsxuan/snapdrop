@@ -62,21 +62,20 @@ class ServerConnection {
                 this.send({ type: 'pong' });
                 break;
             case 'display-name':
-                // 存储服务器分配的peerId
+                // Store server-assigned peerId
                 if (msg.message && msg.message.peerId) {
-                    console.log('接收到服务器分配的peerId:', msg.message.peerId);
+                    console.log('Received server-assigned peerId:', msg.message.peerId);
                     this._selfId = msg.message.peerId;
-                    // 触发事件通知UI更新
+                    // Trigger UI update event
                     msg.message.selfId = msg.message.peerId;
                 }
                 Events.fire('display-name', msg);
                 break;
             case 'file':
-                // 处理文件消息
-                // 不直接触发file-received事件，而是收集文件元数据等待后续传输
+                // Handle file metadata
                 if (!this._fileInfo) this._fileInfo = {};
                 
-                // 使用文件ID而不是发送者ID作为键，允许一个发送者同时发送多个文件
+                // Use fileId as key instead of sender ID to allow multiple files
                 const fileId = msg.fileId || msg.sender;
                 
                 this._fileInfo[fileId] = {
@@ -91,12 +90,12 @@ class ServerConnection {
                     data: []
                 };
                 
-                console.log('接收到文件元数据:', msg.name, msg.size, '文件ID:', msg.fileId || '未指定');
+                console.log('Received file metadata:', msg.name, msg.size, 'FileID:', msg.fileId || 'not specified');
                 break;
             case 'file-chunk':
-                // 处理文件块数据
+                // Handle legacy file chunk data
                 if (!this._fileInfo || !this._fileInfo[msg.sender]) {
-                    console.error('收到文件块但没有元数据');
+                    console.error('Received chunk but no metadata');
                     break;
                 }
                 
@@ -104,19 +103,19 @@ class ServerConnection {
                 fileInfo.bytesReceived += msg.chunk.byteLength;
                 fileInfo.data.push(msg.chunk);
                 
-                // 更新进度
+                // Update progress
                 const progress = fileInfo.bytesReceived / fileInfo.size;
                 Events.fire('file-progress', {
                     sender: msg.sender,
                     progress: Math.min(1, progress)
                 });
                 
-                // 检查是否传输完成
+                // Check if transfer complete
                 if (fileInfo.bytesReceived >= fileInfo.size) {
-                    // 创建完整的文件blob
+                    // Create complete file blob
                     const blob = new Blob(fileInfo.data, {type: fileInfo.mime});
                     
-                    // 触发文件接收事件
+                    // Trigger file received event
                     Events.fire('file-received', {
                         name: fileInfo.name,
                         mime: fileInfo.mime,
@@ -125,22 +124,22 @@ class ServerConnection {
                         sender: fileInfo.sender
                     });
                     
-                    // 清理存储
+                    // Cleanup
                     delete this._fileInfo[msg.sender];
                 }
                 break;
             case 'file-chunk-header':
-                // 记录当前接收的文件ID和预期大小，用于后续的二进制数据处理
+                // Track current file ID and expected size for binary data
                 const chunkFileId = msg.fileId || msg.sender;
                 this._lastBinaryId = chunkFileId;
                 
-                // 确保文件信息存在
+                // Ensure file info exists
                 if (!this._fileInfo || !this._fileInfo[chunkFileId]) {
-                    console.error('收到文件块头信息但没有相关文件元数据，尝试创建临时记录');
-                    // 创建临时记录以便接收数据
+                    console.error('Received chunk header but no file metadata, creating temporary record');
+                    // Create temporary record
                     if (!this._fileInfo) this._fileInfo = {};
                     this._fileInfo[chunkFileId] = {
-                        name: '未知文件',
+                        name: 'Unknown file',
                         mime: 'application/octet-stream',
                         size: msg.totalSize || 0,
                         sender: msg.sender,
@@ -153,12 +152,12 @@ class ServerConnection {
                         expectedChunkSize: msg.size
                     };
                 } else {
-                    // 保存块信息
+                    // Save chunk info
                     const fileInfo = this._fileInfo[chunkFileId];
                     fileInfo.expectedChunkSize = msg.size;
                     fileInfo.currentChunkIndex = msg.currentChunk;
                     
-                    // 如果提供了偏移量和总大小，更新相关信息
+                    // Update offset and size if provided
                     if (msg.offset !== undefined) {
                         fileInfo.offset = msg.offset;
                     }
@@ -170,54 +169,64 @@ class ServerConnection {
                     }
                 }
                 
-                console.log(`预期接收文件块，大小: ${msg.size} 字节，块: ${msg.currentChunk}/${msg.totalChunks}，文件ID: ${msg.fileId || '未指定'}`);
+                console.log(`Expected file chunk, size: ${msg.size} bytes, chunk: ${msg.currentChunk}/${msg.totalChunks}, fileId: ${msg.fileId || 'not specified'}`);
                 break;
             case 'file-transfer-complete':
-                // 处理文件传输完成消息
+                // Handle file transfer completion
                 const transferFileId = msg.fileId || msg.sender;
-                console.log(`接收到文件传输完成消息: ${msg.name}, 大小: ${msg.size} 字节, 块数: ${msg.chunkCount}, 文件ID: ${transferFileId}, 是否最后: ${msg.isLast}`);
+                console.log(`Received file transfer complete: ${msg.name}, size: ${msg.size} bytes, chunks: ${msg.chunkCount}, fileId: ${transferFileId}, isLast: ${msg.isLast}`);
                 
-                // 检查是否有未完成的文件信息
+                // Check for pending file info
                 if (this._fileInfo && this._fileInfo[transferFileId]) {
                     const fileInfo = this._fileInfo[transferFileId];
                     
-                    // 确保文件信息的正确性
+                    // Update file info if needed
                     if (msg.size && !fileInfo.size) {
                         fileInfo.size = msg.size;
                     }
-                    if (msg.name && (!fileInfo.name || fileInfo.name === '未知文件')) {
+                    if (msg.name && (!fileInfo.name || fileInfo.name === 'Unknown file')) {
                         fileInfo.name = msg.name;
                     }
                     if (msg.chunkCount && (!fileInfo.totalChunks || fileInfo.totalChunks === 0)) {
                         fileInfo.totalChunks = msg.chunkCount;
                     }
                     
-                    // 检查是否需要结束传输
+                    // Check if we need to finalize
                     if (fileInfo.bytesReceived > 0) {
-                        console.log(`文件传输完成信号接收: ${fileInfo.name}, 已接收: ${fileInfo.bytesReceived}/${fileInfo.size} 字节, 块: ${fileInfo.chunksReceived}/${msg.chunkCount}`);
-                        // 强制完成传输
+                        console.log(`File transfer complete signal: ${fileInfo.name}, received: ${fileInfo.bytesReceived}/${fileInfo.size} bytes, chunks: ${fileInfo.chunksReceived}/${msg.chunkCount}`);
+                        // Force completion
                         this._finalizeFileTransfer(fileInfo, msg.sender, transferFileId);
                     } else {
-                        console.log(`收到文件传输完成消息，但文件 ${fileInfo.name} 未接收到任何数据`);
+                        console.log(`Received transfer complete but no data for ${fileInfo.name}`);
                     }
                     
-                    // 如果是最后的消息，清理lastBinaryId
+                    // Clear lastBinaryId if this is the last message
                     if (msg.isLast && this._lastBinaryId === transferFileId) {
-                        console.log(`清理最后二进制ID: ${this._lastBinaryId}`);
+                        console.log(`Clearing last binary ID: ${this._lastBinaryId}`);
                         this._lastBinaryId = null;
                     }
                 } else {
-                    console.log(`收到文件传输完成消息，但找不到文件信息: ${transferFileId}`);
+                    console.log(`Received transfer complete but no file info: ${transferFileId}`);
                 }
                 break;
+            case 'file-received-feedback':
+                // Handle file received feedback
+                console.log(`Received file feedback: ${msg.fileName}, size: ${msg.size} bytes, status: ${msg.success ? 'success' : 'failure'}`);
+                
+                // Show notification
+                Events.fire('notify-user', {
+                    message: `文件 ${msg.fileName} 已被对方接收`,
+                    timeout: 3000
+                });
+                break;
             case 'text':
-                // 处理WebSocket文本消息
+                // Handle WebSocket text message
                 if (msg.text) {
                     try {
-                        // 解码文本，与RTCPeer使用相同的解码方式
+                        // Decode text using same method as RTCPeer
                         const escaped = decodeURIComponent(escape(atob(msg.text)));
                         
-                        // 获取发送者名称
+                        // Get sender name
                         let peerName = '';
                         const peerElement = document.getElementById(msg.sender);
                         if (peerElement) {
@@ -227,29 +236,19 @@ class ServerConnection {
                             }
                         }
                         
-                        // 触发单一事件，包含所有需要的信息
+                        // Trigger single event with all info
                         Events.fire('text-received', {
                             text: escaped,
                             sender: msg.sender,
                             peerName: peerName
                         });
                     } catch (error) {
-                        console.error('解码文本消息时出错:', error);
+                        console.error('Error decoding text message:', error);
                     }
                 }
                 break;
-            case 'file-received-feedback':
-                // 处理文件接收反馈消息
-                console.log(`收到文件接收反馈: ${msg.fileName}, 大小: ${msg.size} 字节, 状态: ${msg.success ? '成功' : '失败'}`);
-                
-                // 显示通知
-                Events.fire('notify-user', {
-                    message: `文件 ${msg.fileName} 已被对方接收`,
-                    timeout: 3000
-                });
-                break;
             default:
-                console.error('WS: unkown message type', msg);
+                console.error('WS: unknown message type', msg);
         }
     }
 
@@ -331,55 +330,55 @@ class ServerConnection {
     }
 
     _onBinaryData(binaryData) {
-        // 处理二进制数据（通常是文件块）
-        // 检查是否有等待接收数据的发送者/文件ID
+        // Process binary data (typically file chunks)
+        // Check if we have sender/file ID info
         const fileKey = this._lastBinaryId;
         if (!fileKey || !this._fileInfo || !this._fileInfo[fileKey]) {
-            console.error('收到二进制数据但没有相关文件信息，fileKey:', fileKey);
+            console.error('Received binary data but no file info, fileKey:', fileKey);
             return;
         }
         
-        // 将数据添加到文件信息中
+        // Add data to file info
         const fileInfo = this._fileInfo[fileKey];
         if (!fileInfo) {
-            console.error('找不到文件信息:', fileKey);
+            console.error('File info not found:', fileKey);
             return;
         }
         
-        // 如果文件已经被处理过，则忽略
+        // Skip if file already finalized
         if (fileInfo._finalized) {
-            console.log(`忽略文件 ${fileInfo.name} 的额外二进制数据，因为文件已完成`);
+            console.log(`Ignoring extra binary data for ${fileInfo.name}, file already complete`);
             return;
         }
         
-        // 记录接收到的数据
-        console.log(`接收到二进制数据，大小: ${binaryData.byteLength} 字节，文件: ${fileInfo.name || '未知'}, 文件ID: ${fileInfo.fileId || fileKey}, 块: ${fileInfo.chunksReceived + 1}/${fileInfo.totalChunks || '?'}`);
+        // Log received data
+        console.log(`Received binary data, size: ${binaryData.byteLength} bytes, file: ${fileInfo.name || 'unknown'}, fileId: ${fileInfo.fileId || fileKey}, chunk: ${fileInfo.chunksReceived + 1}/${fileInfo.totalChunks || '?'}`);
         
-        // 确保字节计数是数字类型
+        // Ensure proper number types
         const byteLength = Number(binaryData.byteLength) || 0;
         fileInfo.bytesReceived = Number(fileInfo.bytesReceived) || 0;
         fileInfo.bytesReceived += byteLength;
         fileInfo.data.push(binaryData);
         fileInfo.chunksReceived = (fileInfo.chunksReceived || 0) + 1;
         
-        // 确保文件大小是数字类型
+        // Ensure file size is numeric
         fileInfo.size = Number(fileInfo.size) || 0;
-        fileInfo.lastChunkTime = Date.now(); // 记录最近接收块的时间
+        fileInfo.lastChunkTime = Date.now(); // Track last chunk time
         
-        // 更新进度（仅当文件大小大于0时计算百分比）
+        // Calculate progress
         let progressPercent = 0;
         if (fileInfo.size > 0) {
             const progress = fileInfo.bytesReceived / fileInfo.size;
             progressPercent = Math.floor(progress * 100);
         } else if (fileInfo.totalChunks > 0) {
-            // 如果知道总块数，使用块数计算进度
+            // If we know total chunks, use that for progress
             progressPercent = Math.floor((fileInfo.chunksReceived / fileInfo.totalChunks) * 100);
         } else {
-            // 如果都不知道，使用一个假定值
-            progressPercent = Math.floor((fileInfo.data.length / 10) * 100); // 假设有10个块
+            // Fallback to estimate
+            progressPercent = Math.floor((fileInfo.data.length / 10) * 100);
         }
         
-        console.log(`文件接收进度: ${progressPercent}%, 已接收: ${fileInfo.bytesReceived}/${fileInfo.size || '未知'} 字节, 块: ${fileInfo.chunksReceived}/${fileInfo.totalChunks || '未知'}, 文件: ${fileInfo.name || '未知文件'}`);
+        console.log(`File progress: ${progressPercent}%, received: ${fileInfo.bytesReceived}/${fileInfo.size || 'unknown'} bytes, chunks: ${fileInfo.chunksReceived}/${fileInfo.totalChunks || 'unknown'}, file: ${fileInfo.name || 'unknown file'}`);
         
         Events.fire('file-progress', {
             sender: fileInfo.sender,
@@ -387,60 +386,60 @@ class ServerConnection {
             name: fileInfo.name
         });
         
-        // 检查传输是否完成
+        // Check if transfer is complete
         const isComplete = fileInfo.size > 0 && fileInfo.bytesReceived >= fileInfo.size;
         const isChunksComplete = fileInfo.totalChunks > 0 && fileInfo.chunksReceived >= fileInfo.totalChunks;
         
-        // 如果文件已接收完成
+        // If file is complete
         if (isComplete || isChunksComplete) {
-            console.log(`文件接收完成: ${fileInfo.name}, 大小: ${fileInfo.bytesReceived} 字节, 块数: ${fileInfo.chunksReceived}/${fileInfo.totalChunks || '?'}`);
+            console.log(`File reception complete: ${fileInfo.name}, size: ${fileInfo.bytesReceived} bytes, chunks: ${fileInfo.chunksReceived}/${fileInfo.totalChunks || '?'}`);
             this._finalizeFileTransfer(fileInfo, fileInfo.sender, fileKey);
         } else if (fileInfo.chunksReceived >= 6 && !fileInfo._completionTimer) {
-            // 移除自动完成的定时器，我们需要显式完成信号
-            console.log(`已接收${fileInfo.chunksReceived}个块，等待文件传输完成信号...`);
+            // Wait for explicit completion signal
+            console.log(`Received ${fileInfo.chunksReceived} chunks, waiting for transfer completion signal...`);
         }
     }
     
     _finalizeFileTransfer(fileInfo, senderId, fileKey) {
-        // 检查是否已经完成处理，避免重复处理
+        // Check if already processed to avoid duplication
         if (fileInfo._finalized) {
-            console.log(`文件 ${fileInfo.name} 已经处理过，跳过重复处理`);
+            console.log(`File ${fileInfo.name} already processed, skipping duplicate processing`);
             return;
         }
         
-        // 标记为已处理
+        // Mark as processed
         fileInfo._finalized = true;
         
-        console.log(`完成文件传输: ${fileInfo.name}, 大小: ${fileInfo.bytesReceived} 字节, 块数: ${fileInfo.chunksReceived}`);
+        console.log(`Finalizing file transfer: ${fileInfo.name}, size: ${fileInfo.bytesReceived} bytes, chunks: ${fileInfo.chunksReceived}`);
         
-        // 创建完整的文件blob
+        // Create complete file blob
         const blob = new Blob(fileInfo.data, {type: fileInfo.mime});
         
-        // 检查文件大小是否与预期一致
+        // Verify file size matches expected
         if (fileInfo.size > 0 && blob.size !== fileInfo.size) {
-            console.warn(`文件大小不匹配: 预期 ${fileInfo.size} 字节, 实际 ${blob.size} 字节`);
-            // 如果文件大小偏差过大，可能是传输错误
+            console.warn(`File size mismatch: expected ${fileInfo.size} bytes, got ${blob.size} bytes`);
+            // Check for significant discrepancy
             if (Math.abs(blob.size - fileInfo.size) > fileInfo.size * 0.05) {
-                console.error(`文件大小偏差过大，可能传输不完整`);
+                console.error(`Large file size discrepancy, transfer may be incomplete`);
             }
         }
         
-        // 清除正在进行中的任何计时器
+        // Clear any active timers
         if (fileInfo._completionTimer) {
             clearTimeout(fileInfo._completionTimer);
             fileInfo._completionTimer = null;
         }
         
-        // 触发文件接收事件
+        // Trigger file received event
         Events.fire('file-received', {
-            name: fileInfo.name || '未命名文件',
+            name: fileInfo.name || 'Unnamed file',
             mime: fileInfo.mime || 'application/octet-stream',
             size: fileInfo.bytesReceived,
             blob: blob,
             sender: fileInfo.sender || senderId
         });
         
-        // 发送反馈
+        // Send feedback
         this.send({
             type: 'file-received-feedback',
             to: senderId,
@@ -451,7 +450,7 @@ class ServerConnection {
             success: true
         });
         
-        // 清理存储
+        // Cleanup
         delete this._fileInfo[fileKey || senderId];
         if (this._lastBinaryId === fileKey) {
             this._lastBinaryId = null;
@@ -896,25 +895,24 @@ class WSPeer {
     }
 
     sendFiles(files) {
-        // 使用WebSocket分块发送文件
+        // Send files over WebSocket
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             
-            // 防止同时发送多个文件
+            // Queue remaining files, process one at a time
             if (i > 0) {
-                console.log(`将在当前文件完成后发送文件: ${file.name}`);
+                console.log(`Will send file: ${file.name} after current transfer completes`);
                 setTimeout(() => {
-                    // 将剩余文件放入队列
                     const remainingFiles = Array.from(files).slice(i);
                     this.sendFiles(remainingFiles);
                 }, 1000);
-                return; // 仅处理第一个文件，其余放入队列
+                return; // Only process first file, queue the rest
             }
             
-            // 生成唯一文件ID
+            // Generate unique file ID
             const fileId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
             
-            // 先发送文件元数据
+            // Send file metadata
             this._send({
                 type: 'file',
                 name: file.name,
@@ -923,98 +921,98 @@ class WSPeer {
                 fileId: fileId
             });
             
-            // 设置每个块的大小（64KB）
+            // Set chunk size (64KB)
             const chunkSize = 64 * 1024;
             
-            // 创建文件读取器
+            // Create file reader
             const fileReader = new FileReader();
             let offset = 0;
             let chunkCount = Math.ceil(file.size / chunkSize);
             let sentChunks = 0;
             
-            // 文件传输开始标记
-            console.log(`开始发送文件: ${file.name}, 大小: ${file.size} 字节, 总块数: ${chunkCount}, 目标: ${this._peerId}`);
+            // File transfer start marker
+            console.log(`Starting file transfer: ${file.name}, size: ${file.size} bytes, chunks: ${chunkCount}, target: ${this._peerId}`);
             
-            // 分块读取并发送文件
+            // Read and send file in chunks
             const readNextChunk = () => {
                 const slice = file.slice(offset, offset + chunkSize);
                 fileReader.readAsArrayBuffer(slice);
             };
             
-            // 创建完成标记，避免后续文件误认为是同一文件的部分
+            // Completion handler to avoid mistaking subsequent files as parts of this one
             const onTransferComplete = () => {
-                // 发送文件传输完成标记
+                // Send file transfer completion marker
                 this._send({
                     type: 'file-transfer-complete',
                     name: file.name,
                     size: file.size,
                     chunkCount: sentChunks,
                     fileId: fileId,
-                    isLast: true // 标记这是当前文件的最后一条消息
+                    isLast: true // Mark as final message for this file
                 });
                 
-                console.log(`文件发送完成: ${file.name}, 总大小: ${file.size} 字节, 发送块数: ${sentChunks}`);
+                console.log(`File transfer complete: ${file.name}, total size: ${file.size} bytes, chunks sent: ${sentChunks}`);
                 
-                // 通知UI文件传输已完成
+                // Notify UI
                 Events.fire('notify-user', {
                     message: `文件 ${file.name} 传输完成`,
                     timeout: 3000
                 });
             };
             
-            // 处理文件块读取完成事件
+            // Handle file chunk read completion
             fileReader.onload = (e) => {
                 const chunk = e.target.result;
                 sentChunks++;
                 
-                // 先发送控制消息标识即将发送文件块
+                // Send control message before chunk
                 this._send({
                     type: 'file-chunk-header',
                     size: chunk.byteLength,
-                    offset: offset,             // 添加偏移量信息
-                    totalSize: file.size,       // 添加总大小信息
-                    currentChunk: sentChunks,   // 当前块编号
-                    totalChunks: chunkCount,    // 总块数
-                    fileId: fileId              // 文件ID
+                    offset: offset,             // Include offset info
+                    totalSize: file.size,       // Include total size
+                    currentChunk: sentChunks,   // Current chunk number
+                    totalChunks: chunkCount,    // Total chunks
+                    fileId: fileId              // File ID
                 });
                 
-                // 等待一小段时间确保控制消息已发送
+                // Wait briefly to ensure control message is sent
                 setTimeout(() => {
-                    // 直接发送二进制数据
+                    // Send binary data directly
                     this._server.sendBinary(chunk);
                     
-                    // 更新偏移量和进度
+                    // Update offset and progress
                     offset += chunk.byteLength;
                     const progress = Math.min(1, offset / file.size);
                     
-                    // 发送进度更新
+                    // Update progress UI
                     Events.fire('file-progress', {
                         recipient: this._peerId,
                         progress: progress,
                         name: file.name
                     });
                     
-                    // 如果还有数据，继续读取下一块
+                    // Continue reading if more data available
                     if (offset < file.size) {
-                        // 添加合适的延迟以防止发送过快导致的丢包，但不要太长
+                        // Small delay to prevent flooding
                         setTimeout(readNextChunk, 20);
                     } else {
-                        // 文件传输完成，延迟一段时间确保最后一块已经发送完毕
+                        // Complete the transfer after a delay
                         setTimeout(onTransferComplete, 300);
                     }
                 }, 20);
             };
             
-            // 处理文件读取错误
+            // Handle read errors
             fileReader.onerror = (error) => {
-                console.error('文件读取错误:', error);
+                console.error('File read error:', error);
                 Events.fire('notify-user', {
                     message: '文件传输失败: ' + file.name,
                     timeout: 5000
                 });
             };
             
-            // 开始读取首个块
+            // Start reading the first chunk
             readNextChunk();
         }
     }

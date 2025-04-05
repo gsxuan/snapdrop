@@ -1,13 +1,13 @@
 var process = require('process')
 // Handle SIGINT
 process.on('SIGINT', () => {
-  console.info("SIGINT收到，正在退出...")
+  console.info("SIGINT received, exiting...")
   process.exit(0)
 })
 
 // Handle SIGTERM
 process.on('SIGTERM', () => {
-  console.info("SIGTERM收到，正在退出...")
+  console.info("SIGTERM received, exiting...")
   process.exit(0)
 })
 
@@ -98,9 +98,9 @@ class SnapdropServer {
             peer.socket.on('message', message => this._onRtcMessage(peer, message));
         } else {
             peer.socket.on('message', message => {
-                // 处理二进制数据
+                // Handle binary data
                 if (message instanceof Buffer) {
-                    // 如果有最后的对等设备ID，用它来查找接收者
+                    // Find recipient using last peer ID
                     if (peer.lastPeerId && this._rooms[peer.ip] && this._rooms[peer.ip][peer.lastPeerId]) {
                         const recipient = this._rooms[peer.ip][peer.lastPeerId];
                         if (recipient) {
@@ -108,22 +108,22 @@ class SnapdropServer {
                             return;
                         }
                     }
-                    console.log(`无法转发二进制数据，找不到接收者`);
+                    console.log(`Cannot forward binary data, recipient not found`);
                     return;
                 }
                 
-                // 处理文本消息
+                // Handle text messages
                 this._onMessage(peer, message);
             });
         }
         
-        // 发送欢迎信息给新连接的对等设备
+        // Send welcome message to newly connected peer
         this._send(peer, {
             type: 'display-name',
             message: {
                 displayName: peer.name.displayName,
                 deviceName: peer.name.deviceName,
-                peerId: peer.id  // 明确发送对等设备ID
+                peerId: peer.id  // Explicitly send peer ID
             }
         });
         
@@ -169,30 +169,30 @@ class SnapdropServer {
             case 'file-transfer-complete':
             case 'file-received-feedback':
             case 'text':
-                // 文件、文件块、文件传输完成、文件接收反馈和文本消息需要添加发送者信息
+                // Add sender info to file, chunk, completion and text messages
                 message.sender = sender.id;
-                // 转发到接收者，继续执行下面的中继逻辑
+                // Continue to relay logic below
             default:
-                // relay message to recipient
+                // Relay message to recipient
                 if (message.to && this._rooms[sender.ip]) {
                     const recipientId = message.to; // TODO: sanitize
                     const recipient = this._rooms[sender.ip][recipientId];
                     if (!recipient) {
-                        console.log(`接收者 ${recipientId} 不存在`);
+                        console.log(`Recipient ${recipientId} not found`);
                         return;
                     }
                     
-                    // 复制消息以避免修改原始对象
+                    // Clone message to avoid modifying original
                     const msgToSend = JSON.parse(JSON.stringify(message));
                     delete msgToSend.to;
-                    // 添加发送者ID
+                    // Add sender ID
                     msgToSend.sender = sender.id;
                     
-                    // 记录通信对等设备ID，供二进制传输使用
+                    // Track peer IDs for binary transfers
                     sender.lastPeerId = recipientId;
                     recipient.lastPeerId = sender.id;
                     
-                    console.log(`转发消息: ${message.type} 从 ${sender.id} 到 ${recipientId}`);
+                    console.log(`Forwarding message: ${message.type} from ${sender.id} to ${recipientId}`);
                     this._send(recipient, msgToSend);
                     return;
                 }
