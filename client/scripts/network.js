@@ -164,6 +164,24 @@ class ServerConnection {
             case 'ping':
                 this.send({ type: 'pong' });
                 break;
+            case 'set-cookie':
+                if (msg.cookie) {
+                    // 解析cookie并在本地存储
+                    try {
+                        const userNameMatch = msg.cookie.match(/username=([^;]+)/);
+                        if (userNameMatch && userNameMatch[1]) {
+                            const decodedName = decodeURIComponent(userNameMatch[1]);
+                            localStorage.setItem('user-display-name', decodedName);
+                            console.log('用户名已保存到cookie:', decodedName);
+                            
+                            // 创建document cookie来与服务器共享
+                            document.cookie = msg.cookie;
+                        }
+                    } catch (e) {
+                        console.error('处理cookie时出错:', e);
+                    }
+                }
+                break;
             case 'display-name':
                 if (msg.message && msg.message.peerId) {
                     console.log('Received server-assigned peerId:', msg.message.peerId);

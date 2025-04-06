@@ -204,6 +204,19 @@ class SnapdropServer {
                         sender.name.displayName = message.userName;
                         displayNameUpdated = true;
                         log(`用户 ${sender.id} 更新名称为: ${message.userName}`);
+                        
+                        // 设置cookie来持久化存储用户名
+                        try {
+                            // 发送一个带有用户名的cookie给客户端
+                            const encodedUserName = encodeURIComponent(message.userName);
+                            sender.socket.send(JSON.stringify({
+                                type: 'set-cookie',
+                                cookie: `username=${encodedUserName}; SameSite=Strict; Secure; Max-Age=31536000` // 一年有效期
+                            }));
+                            log(`已为用户 ${sender.id} 设置用户名cookie`);
+                        } catch (e) {
+                            log(`设置用户名cookie时出错: ${e.message}`);
+                        }
                     }
                     
                     // 更新设备信息
@@ -580,6 +593,26 @@ class Peer {
         
         // 记录设备ID分配情况
         log(`设备ID分配: ${this.id} (原始ID: ${this.originalId}, 指纹: ${fingerprintHash.substr(0, 8)})`);
+        
+        // 检查是否有存储的用户自定义名称
+        try {
+            // 检查cookie中是否有用户名信息
+            const cookies = request.headers.cookie || '';
+            const userNameMatch = cookies.match(/username=([^;]+)/);
+            
+            if (userNameMatch && userNameMatch[1]) {
+                // 解码用户名
+                try {
+                    const decodedName = decodeURIComponent(userNameMatch[1]);
+                    this.userProvidedName = decodedName;
+                    log(`从cookie加载用户名: ${decodedName} 用于设备: ${this.id}`);
+                } catch (e) {
+                    log(`解码cookie中的用户名失败: ${e.message}`);
+                }
+            }
+        } catch (e) {
+            log(`解析用户名cookie时出错: ${e.message}`);
+        }
     }
 
     toString() {
@@ -607,14 +640,18 @@ class Peer {
         // 尝试获取用户名称
         let displayName = '';
         
+        // 首先检查是否有来自setPeerId读取的cookie中的用户名
+        if (this.userProvidedName) {
+            displayName = this.userProvidedName;
+            log(`使用cookie中存储的用户名: ${displayName}`);
+        }
         // 尝试从请求头获取用户名信息
-        if (req.headers['x-user-name']) {
+        else if (req.headers['x-user-name']) {
             displayName = req.headers['x-user-name'];
             log(`使用请求头中的用户名: ${displayName}`);
         }
-        
         // 如果没有找到用户名，则检查是否有来自客户端提供的名称
-        if (!displayName && req.headers['x-device-name']) {
+        else if (req.headers['x-device-name']) {
             displayName = req.headers['x-device-name'];
             log(`使用请求头中的设备名称: ${displayName}`);
         }
