@@ -701,6 +701,7 @@ class Peer {
         this._peerId = peerId;
         this._filesQueue = [];
         this._busy = false;
+        this._fileTransfer = new FileTransferAdapter(this, this._peerId, this._server);
     }
 
     sendJSON(message) {
@@ -708,162 +709,7 @@ class Peer {
     }
 
     sendFiles(files) {
-        const fileQueue = Array.from(files);
-        if (fileQueue.length === 0) return;
-        
-        const processNextFile = () => {
-            if (fileQueue.length === 0) return;
-            
-            const file = fileQueue.shift();
-            const fileId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-            
-            this._send({
-                type: 'file',
-                name: file.name,
-                mime: file.type,
-                size: file.size,
-                fileId: fileId
-            });
-            
-            const chunkSize = 256 * 1024;
-            let offset = 0;
-            let chunkCount = Math.ceil(file.size / chunkSize);
-            let sentChunks = 0;
-            
-            console.log(`开始文件传输: ${file.name}, 大小: ${file.size} 字节, 块数: ${chunkCount}, 目标: ${this._peerId}`);
-            
-            const processFile = async () => {
-                for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
-                    const start = chunkIndex * chunkSize;
-                    const end = Math.min(start + chunkSize, file.size);
-                    const slice = file.slice(start, end);
-                    
-                    try {
-                        const chunk = await new Promise((resolve, reject) => {
-                            const reader = new FileReader();
-                            reader.onload = e => resolve(e.target.result);
-                            reader.onerror = e => reject(e);
-                            reader.readAsArrayBuffer(slice);
-                        });
-                        
-                        this._send({
-                            type: 'file-chunk-header',
-                            size: chunk.byteLength,
-                            offset: start,
-                            totalSize: file.size,
-                            currentChunk: chunkIndex + 1,
-                            totalChunks: chunkCount,
-                            fileId: fileId,
-                            name: file.name
-                        });
-                        
-                        await new Promise(resolve => setTimeout(resolve, 5));
-                        
-                        this._server.sendBinary(chunk);
-                        
-                        sentChunks++;
-                        
-                        const progress = Math.min(1, (start + chunk.byteLength) / file.size);
-                        Events.fire('file-progress', {
-                            recipient: this._peerId,
-                            progress: progress,
-                            name: file.name
-                        });
-                        
-                        await new Promise(resolve => setTimeout(resolve, 2));
-                    } catch (error) {
-                        console.error(`处理文件块错误 (${chunkIndex+1}/${chunkCount}):`, error);
-                        let retries = 0;
-                        let success = false;
-                        
-                        while (retries < 3 && !success) {
-                            try {
-                                console.log(`重试发送文件块 ${chunkIndex+1}/${chunkCount} (第${retries+1}次尝试)`);
-                                
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                                
-                                const chunk = await new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onload = e => resolve(e.target.result);
-                                    reader.onerror = e => reject(e);
-                                    reader.readAsArrayBuffer(slice);
-                                });
-                                
-                                this._send({
-                                    type: 'file-chunk-header',
-                                    size: chunk.byteLength,
-                                    offset: start,
-                                    totalSize: file.size,
-                                    currentChunk: chunkIndex + 1,
-                                    totalChunks: chunkCount,
-                                    fileId: fileId,
-                                    name: file.name,
-                                    isRetry: true
-                                });
-                                
-                                await new Promise(resolve => setTimeout(resolve, 50));
-                                this._server.sendBinary(chunk);
-                                sentChunks++;
-                                success = true;
-                            } catch (retryError) {
-                                console.error(`重试失败 (${retries+1}/3):`, retryError);
-                                retries++;
-                            }
-                        }
-                        
-                        if (!success) {
-                            console.error(`无法发送文件块 ${chunkIndex+1}/${chunkCount}，跳过`);
-                        }
-                    }
-                }
-                
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
-                this._send({
-                    type: 'file-transfer-complete',
-                    name: file.name,
-                    size: file.size,
-                    chunkCount: sentChunks,
-                    fileId: fileId,
-                    isLast: true
-                });
-                
-                console.log(`文件传输完成: ${file.name}, 总大小: ${file.size} 字节, 已发送块数: ${sentChunks}`);
-                
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                this._send({
-                    type: 'file-transfer-complete',
-                    name: file.name,
-                    size: file.size,
-                    chunkCount: sentChunks,
-                    fileId: fileId,
-                    isLast: true,
-                    isFinalConfirmation: true
-                });
-                
-                Events.fire('notify-user', {
-                    message: `文件 ${file.name} 传输完成`,
-                    timeout: 3000
-                });
-            };
-            
-            processFile()
-                .then(() => {
-                    console.log(`等待处理下一个文件...`);
-                    setTimeout(processNextFile, 2000);
-                })
-                .catch(error => {
-                    console.error('文件传输过程中出错:', error);
-                    Events.fire('notify-user', {
-                        message: '文件传输失败: ' + file.name,
-                        timeout: 5000
-                    });
-                    setTimeout(processNextFile, 2000);
-                });
-        };
-        
-        processNextFile();
+        this._fileTransfer.sendFiles(files);
     }
 
     sendText(text) {
@@ -1257,6 +1103,7 @@ class WSPeer {
     constructor(server, peerId) {
         this._server = server;
         this._peerId = peerId;
+        this._fileTransfer = new WSFileTransferAdapter(this, this._peerId, this._server);
     }
 
     _send(message) {
@@ -1279,6 +1126,30 @@ class WSPeer {
     }
 
     sendFiles(files) {
+        this._fileTransfer.sendFiles(files);
+    }
+
+    refresh() {
+    }
+}
+
+class FileTransfer {
+
+    constructor(sender, peerId, server) {
+        this._sender = sender;
+        this._peerId = peerId;
+        this._server = server;
+    }
+
+    _send(message) {
+        throw new Error('_send方法必须由子类实现');
+    }
+
+    _sendBinary(chunk) {
+        throw new Error('_sendBinary方法必须由子类实现');
+    }
+
+    async sendFiles(files) {
         const fileQueue = Array.from(files);
         if (fileQueue.length === 0) return;
         
@@ -1310,12 +1181,7 @@ class WSPeer {
                     const slice = file.slice(start, end);
                     
                     try {
-                        const chunk = await new Promise((resolve, reject) => {
-                            const reader = new FileReader();
-                            reader.onload = e => resolve(e.target.result);
-                            reader.onerror = e => reject(e);
-                            reader.readAsArrayBuffer(slice);
-                        });
+                        const chunk = await this._readFileChunk(slice);
                         
                         this._send({
                             type: 'file-chunk-header',
@@ -1330,7 +1196,7 @@ class WSPeer {
                         
                         await new Promise(resolve => setTimeout(resolve, 5));
                         
-                        this._server.sendBinary(chunk);
+                        this._sendBinary(chunk);
                         
                         sentChunks++;
                         
@@ -1353,12 +1219,7 @@ class WSPeer {
                                 
                                 await new Promise(resolve => setTimeout(resolve, 500));
                                 
-                                const chunk = await new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onload = e => resolve(e.target.result);
-                                    reader.onerror = e => reject(e);
-                                    reader.readAsArrayBuffer(slice);
-                                });
+                                const chunk = await this._readFileChunk(slice);
                                 
                                 this._send({
                                     type: 'file-chunk-header',
@@ -1373,7 +1234,7 @@ class WSPeer {
                                 });
                                 
                                 await new Promise(resolve => setTimeout(resolve, 50));
-                                this._server.sendBinary(chunk);
+                                this._sendBinary(chunk);
                                 sentChunks++;
                                 success = true;
                             } catch (retryError) {
@@ -1436,44 +1297,44 @@ class WSPeer {
         
         processNextFile();
     }
-
-    refresh() {
+    
+    async _readFileChunk(slice) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = e => resolve(e.target.result);
+            reader.onerror = e => reject(e);
+            reader.readAsArrayBuffer(slice);
+        });
     }
 }
 
-class FileChunker {
-
-    constructor(file, onChunk) {
-        this._chunkSize = 256000;
-        this._offset = 0;
-        this._file = file;
-        this._onChunk = onChunk;
-        this._reader = new FileReader();
-        this._reader.addEventListener('load', e => this._onChunkRead(e.target.result));
+class FileTransferAdapter extends FileTransfer {
+    constructor(peer, peerId, server) {
+        super(peer, peerId, server);
+        this._peer = peer;
     }
-
-    nextPartition() {
-        this._readChunk();
+    
+    _send(message) {
+        this._peer._send(message);
     }
-
-    _readChunk() {
-        const chunk = this._file.slice(this._offset, this._offset + this._chunkSize);
-        this._reader.readAsArrayBuffer(chunk);
+    
+    _sendBinary(chunk) {
+        this._server.sendBinary(chunk);
     }
+}
 
-    _onChunkRead(chunk) {
-        this._offset += chunk.byteLength;
-        this._onChunk(chunk);
-        if (this.isFileEnd()) return;
-        this._readChunk();
+class WSFileTransferAdapter extends FileTransfer {
+    constructor(peer, peerId, server) {
+        super(peer, peerId, server);
+        this._peer = peer;
     }
-
-    isFileEnd() {
-        return this._offset >= this._file.size;
+    
+    _send(message) {
+        this._peer._send(message);
     }
-
-    get progress() {
-        return this._offset / this._file.size;
+    
+    _sendBinary(chunk) {
+        this._server.sendBinary(chunk);
     }
 }
 
@@ -1525,4 +1386,39 @@ RTCPeer.config = {
     'iceServers': [{
         urls: 'stun:stun.l.google.com:19302'
     }]
+}
+
+class FileChunker {
+    constructor(file, onChunk) {
+        this._chunkSize = 256000;
+        this._offset = 0;
+        this._file = file;
+        this._onChunk = onChunk;
+        this._reader = new FileReader();
+        this._reader.addEventListener('load', e => this._onChunkRead(e.target.result));
+    }
+
+    nextPartition() {
+        this._readChunk();
+    }
+
+    _readChunk() {
+        const chunk = this._file.slice(this._offset, this._offset + this._chunkSize);
+        this._reader.readAsArrayBuffer(chunk);
+    }
+
+    _onChunkRead(chunk) {
+        this._offset += chunk.byteLength;
+        this._onChunk(chunk);
+        if (this.isFileEnd()) return;
+        this._readChunk();
+    }
+
+    isFileEnd() {
+        return this._offset >= this._file.size;
+    }
+
+    get progress() {
+        return this._offset / this._file.size;
+    }
 }

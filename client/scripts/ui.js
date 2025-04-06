@@ -497,8 +497,41 @@ class ReceiveTextDialog extends Dialog {
     }
 
     async _onCopy() {
-        await navigator.clipboard.writeText(this.$text.textContent);
-        Events.fire('notify-user', '已复制到剪贴板');
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(this.$text.textContent);
+                Events.fire('notify-user', '已复制到剪贴板');
+            } else {
+                // 使用备用复制方法
+                const textToCopy = this.$text.textContent;
+                const span = document.createElement('span');
+                span.textContent = textToCopy;
+                span.style.whiteSpace = 'pre'; // 保留连续空格和换行符
+                span.style.position = 'absolute';
+                span.style.left = '-9999px';
+                span.style.top = '-9999px';
+
+                document.body.appendChild(span);
+                const selection = window.getSelection();
+                const range = document.createRange();
+                selection.removeAllRanges();
+                range.selectNode(span);
+                selection.addRange(range);
+
+                const success = document.execCommand('copy');
+                selection.removeAllRanges();
+                span.remove();
+
+                if (success) {
+                    Events.fire('notify-user', '已复制到剪贴板');
+                } else {
+                    Events.fire('notify-user', '复制失败，请手动复制');
+                }
+            }
+        } catch (error) {
+            console.error('复制文本时出错:', error);
+            Events.fire('notify-user', '复制失败，请手动复制');
+        }
     }
 }
 
@@ -618,8 +651,38 @@ class Notifications {
 
     _copyText(message, notification) {
         notification.close();
-        if (!navigator.clipboard.writeText(message)) return;
-        this._notify('已复制文本到剪贴板');
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(message)
+                    .then(() => this._notify('已复制文本到剪贴板'))
+                    .catch(err => console.error('复制失败:', err));
+            } else {
+                // 使用备用复制方法
+                const span = document.createElement('span');
+                span.textContent = message;
+                span.style.whiteSpace = 'pre';
+                span.style.position = 'absolute';
+                span.style.left = '-9999px';
+                span.style.top = '-9999px';
+
+                document.body.appendChild(span);
+                const selection = window.getSelection();
+                const range = document.createRange();
+                selection.removeAllRanges();
+                range.selectNode(span);
+                selection.addRange(range);
+
+                const success = document.execCommand('copy');
+                selection.removeAllRanges();
+                span.remove();
+
+                if (success) {
+                    this._notify('已复制文本到剪贴板');
+                }
+            }
+        } catch (error) {
+            console.error('复制文本时出错:', error);
+        }
     }
 
     _bind(notification, handler) {
