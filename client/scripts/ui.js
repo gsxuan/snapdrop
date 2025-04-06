@@ -13,6 +13,11 @@ Events.on('display-name', e => {
     $displayName.title = me.deviceName;
 });
 
+// 页面加载完成后初始化版本号显示
+document.addEventListener('DOMContentLoaded', () => {
+    // 版本号代码已移除
+});
+
 class PeersUI {
 
     constructor() {
@@ -251,54 +256,62 @@ class ReceiveDialog extends Dialog {
 
     constructor() {
         super('receiveDialog');
-        Events.on('file-received', e => {
-            this._nextFile(e.detail);
-        });
+        Events.on('file-received', e => this._onFileReceived(e.detail));
         this._filesQueue = [];
+        this._busy = false;
+        this._downloadSupport = {
+            isSupported: typeof document.createElement('a').download !== 'undefined',
+            isSafari: /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
+        };
     }
 
-    _nextFile(nextFile) {
-        if (nextFile) this._filesQueue.push(nextFile);
-        if (this._busy) return;
+    _onFileReceived(file) {
+        // 添加到文件队列
+        this._filesQueue.push(file);
+        
+        // 如果当前没有正在处理的文件，则开始处理
+        if (!this._busy) {
+            this._processNextFile();
+        }
+    }
+    
+    _processNextFile() {
+        if (this._filesQueue.length === 0) {
+            this._busy = false;
+            return;
+        }
+        
         this._busy = true;
         const file = this._filesQueue.shift();
         this._displayFile(file);
     }
-
-    _dequeueFile() {
-        if (!this._filesQueue.length) { // nothing to do
-            this._busy = false;
-            return;
-        }
-        // dequeue next file
-        setTimeout(_ => {
-            this._busy = false;
-            this._nextFile();
-        }, 300);
-    }
-
+    
     _displayFile(file) {
-        // 尝试播放声音（在用户交互的上下文中）
-        try {
-            window.blop.play().catch(e => console.log('无法播放提示音:', e));
-        } catch (error) {
-            console.log('播放提示音时出错');
-        }
+        // 预先生成Blob URL，提高性能
+        const url = URL.createObjectURL(file.blob);
         
-        // 显示文件信息
+        // 设置文件信息
         this.$el.querySelector('#fileName').textContent = file.name;
         this.$el.querySelector('#fileSize').textContent = this._formatFileSize(file.size);
         
-        // 创建URL对象
-        const url = URL.createObjectURL(file.blob);
+        // 设置下载链接
         const $a = this.$el.querySelector('#download');
         $a.href = url;
         $a.download = file.name;
         
-        // 自动下载检查
-        if(this._autoDownload()){
-            $a.click();
-            this._dequeueFile();
+        // 自动下载处理
+        if (this._autoDownload()) {
+            URL.revokeObjectURL(url); // 释放URL以避免内存泄漏
+            this._downloadFile(file);
+            Events.fire('file-progress', {
+                sender: file.sender,
+                progress: 1
+            });
+            
+            // 处理下一个文件
+            setTimeout(() => {
+                this._processNextFile();
+            }, 0);
             return;
         }
         
@@ -314,18 +327,47 @@ class ReceiveDialog extends Dialog {
         this.show();
         
         // iOS下载兼容
-        if (!window.isDownloadSupported) {
+        if (!this._downloadSupport.isSupported) {
             // fallback for iOS
             $a.target = '_blank';
-            const reader = new FileReader();
-            reader.onload = e => $a.href = reader.result;
-            reader.readAsDataURL(file.blob);
+            // 使用更快的方式
+            if (this._downloadSupport.isSafari) {
+                $a.href = url;
+            } else {
+                const reader = new FileReader();
+                reader.onload = e => $a.href = reader.result;
+                reader.readAsDataURL(file.blob);
+            }
         }
         
         Events.fire('file-progress', {
             sender: file.sender,
             progress: 1
         });
+    }
+    
+    _downloadFile(file) {
+        if (!this._downloadSupport.isSupported) {
+            // 无法自动下载，通知用户
+            Events.fire('notify-user', {
+                message: '您的浏览器不支持自动下载，请手动保存文件',
+                timeout: 5000
+            });
+            return;
+        }
+        
+        // 创建临时链接并触发下载
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(file.blob);
+        a.href = url;
+        a.download = file.name;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
     }
 
     _formatFileSize(bytes) {
@@ -344,12 +386,15 @@ class ReceiveDialog extends Dialog {
         this.$el.querySelector('.preview').style.visibility = 'hidden';
         this.$el.querySelector("#img-preview").src = "";
         super.hide();
-        this._dequeueFile();
+        
+        // 处理下一个文件
+        setTimeout(() => {
+            this._processNextFile();
+        }, 0);
     }
 
-
-    _autoDownload(){
-        return !this.$el.querySelector('#autoDownload').checked
+    _autoDownload() {
+        return !this.$el.querySelector('#autoDownload').checked;
     }
 }
 
@@ -498,8 +543,10 @@ class Notifications {
         // Check whether notification permissions have already been granted
         if (Notification.permission !== 'granted') {
             this.$button = $('notification');
-            this.$button.removeAttribute('hidden');
-            this.$button.addEventListener('click', e => this._requestPermission());
+            if (this.$button) {
+                this.$button.removeAttribute('hidden');
+                this.$button.addEventListener('click', e => this._requestPermission());
+            }
         }
         Events.on('text-received', e => this._messageNotification(e.detail.text));
         Events.on('file-received', e => this._downloadNotification(e.detail.name));
@@ -512,14 +559,16 @@ class Notifications {
                 return;
             }
             this._notify('更便捷的分享体验!');
-            this.$button.setAttribute('hidden', 1);
+            if (this.$button) {
+                this.$button.setAttribute('hidden', 1);
+            }
         });
     }
 
     _notify(message, body) {
         const config = {
             body: body,
-            icon: '/images/logo_transparent_128x128.png',
+            icon: '/images/favicon-96x96.png',
         }
         let notification;
         try {
