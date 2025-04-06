@@ -64,22 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
             animation: card-pulse 1s ease-in-out;
         }
         
-        x-peer.updated::after {
-            content: '已更新';
-            position: absolute;
-            top: -10px;
-            right: -10px;
-            background: #2196F3;
-            color: white;
-            border-radius: 10px;
-            padding: 3px 8px;
-            font-size: 12px;
-            font-weight: bold;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            animation: fadeOut 3s forwards;
-            z-index: 10;
-        }
-        
         x-peer.updated .name {
             animation: highlight-update 3s ease-in-out;
             font-weight: bold;
@@ -90,12 +74,6 @@ document.addEventListener('DOMContentLoaded', () => {
             30% { color: #2196F3; }
             70% { color: #2196F3; }
             100% { color: inherit; font-weight: normal; }
-        }
-        
-        @keyframes fadeOut {
-            0% { opacity: 1; transform: scale(1); }
-            70% { opacity: 1; transform: scale(1); }
-            100% { opacity: 0; transform: scale(0.8); }
         }
         
         @keyframes card-pulse {
@@ -171,13 +149,78 @@ class PeersUI {
     }
 
     _onPeerUpdated(peer) {
-        const $peer = $(`.peer[data-peer-id="${peer.id}"]`);
-        if (!$peer) return;
-        if ($peer.classList.contains('peer-connecting')) $peer.classList.remove('peer-connecting');
-        if (!$peer.dataset.name || $peer.dataset.name !== peer.name) {
-            $peer.dataset.name = peer.name;
+        console.log('处理peer-updated事件:', peer); // 添加日志
+        
+        // 修复选择器 - 尝试多种方式查找对等设备元素
+        let $peer = $(peer.id);
+        
+        // 如果找不到，尝试使用data-peer-id属性查找
+        if (!$peer) {
+            $peer = $(`.peer[data-peer-id="${peer.id}"]`);
+        }
+        
+        // 可能是ID格式问题，尝试直接查找所有对等设备并比较ID
+        if (!$peer) {
+            const allPeers = document.querySelectorAll('x-peer');
+            for (const el of allPeers) {
+                if (el.id === peer.id || el.dataset.peerId === peer.id) {
+                    $peer = el;
+                    break;
+                }
+            }
+        }
+        
+        if (!$peer) {
+            console.warn(`未找到ID为 ${peer.id} 的对等设备元素，将创建新元素`);
+            // 如果仍然找不到，可能需要创建新元素
+            const peerUI = new PeerUI(peer);
+            $$('x-peers').appendChild(peerUI.$el);
+            $peer = peerUI.$el;
+        }
+        
+        if ($peer.classList.contains('peer-connecting')) {
+            $peer.classList.remove('peer-connecting');
+        }
+        
+        // 更新名称显示
+        const $name = $peer.querySelector('.name');
+        const $deviceName = $peer.querySelector('.device-name');
+        
+        let nameChanged = false;
+        
+        if ($name && peer.name && peer.name.displayName) {
+            // 检查名称是否实际发生了变化
+            if ($name.textContent !== peer.name.displayName) {
+                console.log(`更新设备显示名称: ${$name.textContent} -> ${peer.name.displayName}`);
+                $name.textContent = peer.name.displayName;
+                nameChanged = true;
+            }
+        }
+        
+        if ($deviceName && peer.name && peer.name.deviceName) {
+            // 检查设备名称是否实际发生了变化
+            if ($deviceName.textContent !== peer.name.deviceName) {
+                console.log(`更新设备型号: ${$deviceName.textContent} -> ${peer.name.deviceName}`);
+                $deviceName.textContent = peer.name.deviceName;
+                nameChanged = true;
+            }
+        }
+        
+        // 如果名称变化了，添加更新动画效果
+        if (nameChanged) {
+            // 添加更新动画类
+            $peer.classList.add('updated');
+            
+            // 3秒后移除动画类
+            setTimeout(() => {
+                $peer.classList.remove('updated');
+            }, 3000);
+        }
+        
+        if (!$peer.dataset.name || $peer.dataset.name !== peer.name.displayName) {
+            $peer.dataset.name = peer.name.displayName;
             // 添加设备到最近更新的设备集合中
-            PeersUI._updatedPeers.add(peer.name);
+            PeersUI._updatedPeers.add(peer.name.displayName);
             
             const now = Date.now();
             const minInterval = 5000; // 至少5秒内不再次通知
@@ -193,7 +236,7 @@ class PeersUI {
             const updatedCount = PeersUI._updatedPeers.size;
             
             if (updatedCount === 1) {
-                message = `"${peer.name}" 更新了名称`;
+                message = `"${peer.name.displayName}" 更新了名称`;
             } else {
                 message = `${updatedCount}个设备更新了信息`;
             }
@@ -256,6 +299,8 @@ class PeerUI {
         el.id = this._peer.id;
         el.innerHTML = this.html();
         el.ui = this;
+        el.classList.add('peer');
+        el.dataset.peerId = this._peer.id; // 确保设置data-peer-id属性
         el.querySelector('.name').textContent = this._displayName();
         el.querySelector('.device-name').textContent = this._deviceName();
         

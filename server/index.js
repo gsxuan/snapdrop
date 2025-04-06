@@ -210,6 +210,7 @@ class SnapdropServer {
                     log(`收到用户 ${sender.id} 的信息更新请求`);
                     
                     let displayNameUpdated = false;
+                    let deviceInfoUpdated = false;
                     
                     // 更新用户名
                     if (message.userName) {
@@ -235,27 +236,31 @@ class SnapdropServer {
                     // 更新设备信息
                     if (message.deviceName && message.model) {
                         sender.name.deviceName = `${message.deviceName} ${message.model}`;
+                        deviceInfoUpdated = true;
                         log(`用户 ${sender.id} 更新设备信息为: ${sender.name.deviceName}`);
                     } else if (message.deviceName) {
                         sender.name.deviceName = message.deviceName;
+                        deviceInfoUpdated = true;
                         log(`用户 ${sender.id} 更新设备信息为: ${message.deviceName}`);
                     }
                     
-                    // 如果有更新，通知用户自己
-                    if (displayNameUpdated) {
-                        this._send(sender, {
-                            type: 'display-name',
-                            message: {
-                                displayName: sender.name.displayName,
-                                deviceName: sender.name.deviceName,
-                                peerId: sender.id
-                            }
-                        });
-                        
-                        // 通知其他用户此用户更新了名称
-                        log(`正在广播用户 ${sender.id} (${sender.name.displayName}) 的名称更新到所有设备`);
-                        this._notifyPeerUpdate(sender);
-                    }
+                    // 无论如何都通知用户自己和其他设备更新信息
+                    // 只要有更新请求，就强制同步
+                    log(`处理用户 ${sender.id} 的名称更新请求，强制同步到所有设备`);
+                    
+                    // 通知用户自己
+                    this._send(sender, {
+                        type: 'display-name',
+                        message: {
+                            displayName: sender.name.displayName,
+                            deviceName: sender.name.deviceName,
+                            peerId: sender.id
+                        }
+                    });
+                    
+                    // 通知其他用户此用户更新了名称
+                    log(`正在广播用户 ${sender.id} (${sender.name.displayName}) 的名称更新到所有设备`);
+                    this._notifyPeerUpdate(sender);
                 }
                 break;
             case 'file':
@@ -470,6 +475,9 @@ class SnapdropServer {
     _notifyPeerUpdate(updatedPeer) {
         log(`开始通知其他设备 ${updatedPeer.id} 的名称已更新为 ${updatedPeer.name.displayName}`);
         
+        // 创建已通知设备的集合，避免重复通知
+        const notifiedPeers = new Set();
+        
         // 先通知IP房间中的设备
         if (this._rooms[updatedPeer.ip]) {
             for (const otherPeerId in this._rooms[updatedPeer.ip]) {
@@ -478,10 +486,17 @@ class SnapdropServer {
                 
                 const otherPeer = this._rooms[updatedPeer.ip][otherPeerId];
                 log(`通知IP房间内设备 ${otherPeerId} 关于 ${updatedPeer.id} 的名称更新`);
-                this._send(otherPeer, { 
-                    type: 'peer-updated', 
-                    peer: updatedPeer.getInfo() 
-                });
+                
+                try {
+                    this._send(otherPeer, { 
+                        type: 'peer-updated', 
+                        peer: updatedPeer.getInfo() 
+                    });
+                    // 记录已通知
+                    notifiedPeers.add(otherPeerId);
+                } catch (e) {
+                    log(`通知失败: ${e.message}`);
+                }
             }
         }
         
@@ -490,22 +505,28 @@ class SnapdropServer {
         if (this._rooms[globalRoomId]) {
             for (const otherPeerId in this._rooms[globalRoomId]) {
                 // 不要通知自己，也不要重复通知IP房间中已通知的设备
-                if (otherPeerId === updatedPeer.id || 
-                    (this._rooms[updatedPeer.ip] && this._rooms[updatedPeer.ip][otherPeerId])) {
+                if (otherPeerId === updatedPeer.id || notifiedPeers.has(otherPeerId)) {
                     continue;
                 }
                 
                 const otherPeer = this._rooms[globalRoomId][otherPeerId];
                 log(`通知全局房间内设备 ${otherPeerId} 关于 ${updatedPeer.id} 的名称更新`);
-                this._send(otherPeer, { 
-                    type: 'peer-updated', 
-                    peer: updatedPeer.getInfo() 
-                });
+                
+                try {
+                    this._send(otherPeer, { 
+                        type: 'peer-updated', 
+                        peer: updatedPeer.getInfo() 
+                    });
+                    // 记录已通知
+                    notifiedPeers.add(otherPeerId);
+                } catch (e) {
+                    log(`通知失败: ${e.message}`);
+                }
             }
         }
         
         // 检查所有房间是否还有其他设备需要通知
-        log(`已完成通知设备 ${updatedPeer.id} 的名称更新`);
+        log(`已完成通知设备 ${updatedPeer.id} 的名称更新，共通知了 ${notifiedPeers.size} 个设备`);
     }
 }
 
@@ -699,11 +720,26 @@ class Peer {
     }
 
     getInfo() {
-        return {
+        const rtcSupported = this.rtcSupported;
+        
+        // 确保name对象完整，防止客户端收到数据后无法解析
+        const peerInfo = {
             id: this.id,
-            name: this.name,
-            rtcSupported: this.rtcSupported
-        }
+            name: {
+                displayName: this.name.displayName || '',
+                deviceName: this.name.deviceName || '',
+                model: this.name.model || '',
+                os: this.name.os || '',
+                browser: this.name.browser || '',
+                type: this.name.type || 'desktop'
+            },
+            rtcSupported: rtcSupported,
+            lastActive: this.lastActive,
+            timestamp: Date.now()
+        };
+        
+        log(`生成设备 ${this.id} 的信息: ${JSON.stringify(peerInfo.name)}`);
+        return peerInfo;
     }
 
     // return uuid of form xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx

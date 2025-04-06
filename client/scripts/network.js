@@ -55,7 +55,8 @@ class ServerConnection {
                 console.log(`正在向服务器发送用户名更新: ${e.detail}`);
                 this.send({
                     type: 'user-info',
-                    userName: e.detail
+                    userName: e.detail,
+                    updateName: true  // 添加标志，明确表示需要更新名称
                 });
             } else {
                 console.warn('无法发送用户名更新，WS连接尚未建立');
@@ -66,7 +67,8 @@ class ServerConnection {
                         console.log(`连接建立后发送用户名更新: ${e.detail}`);
                         this.send({
                             type: 'user-info',
-                            userName: e.detail
+                            userName: e.detail,
+                            updateName: true  // 添加标志，明确表示需要更新名称
                         });
                     } else {
                         console.error('连接失败，无法发送用户名更新');
@@ -181,6 +183,18 @@ class ServerConnection {
                 Events.fire('peer-left', msg.peerId);
                 break;
             case 'peer-updated':
+                console.log('接收到peer-updated事件，对等设备更新:', msg.peer);
+                
+                // 确保对等设备对象包含完整的名称信息
+                if (msg.peer && msg.peer.name) {
+                    console.log('设备信息:', 
+                        '显示名称=', msg.peer.name.displayName,
+                        '设备名称=', msg.peer.name.deviceName);
+                } else {
+                    console.warn('接收到的peer-updated事件缺少完整的名称信息:', msg.peer);
+                }
+                
+                // 触发UI更新事件
                 Events.fire('peer-updated', msg.peer);
                 break;
             case 'signal':
