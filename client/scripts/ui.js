@@ -13,27 +13,42 @@ Events.on('display-name', e => {
     $displayName.title = me.deviceName;
     $displayName.dataset.selfId = me.peerId || me.selfId;
     
+    // 设置修改名称的函数
+    const updateNameHandler = () => {
+        // 获取实际当前显示名称，去掉"您的名称为 "前缀
+        const displayText = $displayName.textContent;
+        const currentName = displayText.startsWith('您的名称为 ') 
+            ? displayText.substring('您的名称为 '.length) 
+            : me.displayName;
+        
+        const newName = prompt('请输入您想要的显示名称', currentName);
+        
+        if (newName && newName.trim() && newName !== currentName) {
+            // 保存到localStorage
+            localStorage.setItem('user-display-name', newName);
+            
+            // 发送到服务器
+            const event = new CustomEvent('update-user-name', {
+                detail: newName
+            });
+            window.dispatchEvent(event);
+            
+            // 临时更新显示
+            $displayName.textContent = '您的名称为 ' + newName;
+        }
+    };
+    
     // 点击名称可以修改
     if (!$displayName.hasSetClickHandler) {
         $displayName.hasSetClickHandler = true;
-        $displayName.addEventListener('click', () => {
-            const currentName = me.displayName;
-            const newName = prompt('请输入您想要的显示名称', currentName);
-            
-            if (newName && newName.trim() && newName !== currentName) {
-                // 保存到localStorage
-                localStorage.setItem('user-display-name', newName);
-                
-                // 发送到服务器
-                const event = new CustomEvent('update-user-name', {
-                    detail: newName
-                });
-                window.dispatchEvent(event);
-                
-                // 临时更新显示
-                $displayName.textContent = '您的名称为 ' + newName;
-            }
-        });
+        $displayName.addEventListener('click', updateNameHandler);
+    }
+    
+    // 点击铅笔图标也可以修改
+    const $editIcon = $('editNameIcon');
+    if ($editIcon && !$editIcon.hasSetClickHandler) {
+        $editIcon.hasSetClickHandler = true;
+        $editIcon.addEventListener('click', updateNameHandler);
     }
 });
 
@@ -46,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     style.textContent = `
         x-peer.updated {
             position: relative;
+            animation: card-pulse 1s ease-in-out;
         }
         
         x-peer.updated::after {
@@ -57,13 +73,15 @@ document.addEventListener('DOMContentLoaded', () => {
             color: white;
             border-radius: 10px;
             padding: 3px 8px;
-            font-size: 10px;
-            animation: fadeOut 2s forwards;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            animation: fadeOut 3s forwards;
             z-index: 10;
         }
         
         x-peer.updated .name {
-            animation: highlight-update 2s ease-in-out;
+            animation: highlight-update 3s ease-in-out;
             font-weight: bold;
         }
         
@@ -75,9 +93,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         @keyframes fadeOut {
-            0% { opacity: 1; }
-            70% { opacity: 1; }
-            100% { opacity: 0; }
+            0% { opacity: 1; transform: scale(1); }
+            70% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0; transform: scale(0.8); }
+        }
+        
+        @keyframes card-pulse {
+            0% { transform: scale(1); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
+            50% { transform: scale(1.05); box-shadow: 0 4px 16px rgba(33, 150, 243, 0.3); }
+            100% { transform: scale(1); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
         }
     `;
     document.head.appendChild(style);
@@ -92,6 +116,12 @@ class PeersUI {
         Events.on('file-progress', e => this._onFileProgress(e.detail));
         Events.on('paste', e => this._onPaste(e));
         Events.on('peer-updated', e => this._onPeerUpdated(e.detail));
+        
+        // 初始化静态属性，用于跟踪设备更新通知
+        if (!PeersUI._lastNotifyTime) {
+            PeersUI._lastNotifyTime = 0;
+            PeersUI._updatedPeers = new Set();
+        }
     }
 
     _onPeerJoined(peer) {
@@ -141,89 +171,42 @@ class PeersUI {
     }
 
     _onPeerUpdated(peer) {
-        console.log(`收到设备 ${peer.id} 的信息更新`, peer);
-        
-        // 尝试多种选择器找到对应元素
-        let $peer = $(peer.id);
-        
-        // 如果直接ID查找失败，记录所有peer元素ID以辅助调试
-        if (!$peer) {
-            const allPeers = document.querySelectorAll('x-peer');
-            const peerIds = Array.from(allPeers).map(el => el.id);
-            console.log('当前所有peer元素ID:', peerIds);
+        const $peer = $(`.peer[data-peer-id="${peer.id}"]`);
+        if (!$peer) return;
+        if ($peer.classList.contains('peer-connecting')) $peer.classList.remove('peer-connecting');
+        if (!$peer.dataset.name || $peer.dataset.name !== peer.name) {
+            $peer.dataset.name = peer.name;
+            // 添加设备到最近更新的设备集合中
+            PeersUI._updatedPeers.add(peer.name);
             
-            // 尝试部分ID匹配
-            if (peer.id.includes('-')) {
-                // 提取基本ID部分（UUID部分）
-                const baseId = peer.id.split('-')[0];
-                console.log(`尝试查找基本ID: ${baseId}`);
-                
-                for (const el of allPeers) {
-                    if (el.id.startsWith(baseId)) {
-                        console.log(`找到匹配的元素: ${el.id}`);
-                        $peer = el;
-                        break;
-                    }
-                }
+            const now = Date.now();
+            const minInterval = 5000; // 至少5秒内不再次通知
+            
+            // 如果距离上次通知时间过短，不触发新通知
+            if (now - PeersUI._lastNotifyTime < minInterval) return;
+            
+            // 更新上次通知时间
+            PeersUI._lastNotifyTime = now;
+            
+            // 构建通知消息：单设备或多设备更新
+            let message;
+            const updatedCount = PeersUI._updatedPeers.size;
+            
+            if (updatedCount === 1) {
+                message = `"${peer.name}" 更新了名称`;
+            } else {
+                message = `${updatedCount}个设备更新了信息`;
             }
             
-            // 如果仍未找到，尝试直接遍历所有peer元素
-            if (!$peer) {
-                console.log('尝试遍历所有peer元素查找匹配项...');
-                for (const el of allPeers) {
-                    const datasetId = el.dataset.peerId;
-                    console.log(`检查元素: id=${el.id}, data-peer-id=${datasetId}`);
-                    
-                    // 检查id的不同部分是否匹配
-                    if (el.id === peer.id || 
-                        (datasetId && datasetId === peer.id) ||
-                        (peer.id.includes('-') && el.id.includes('-') && 
-                         peer.id.split('-')[0] === el.id.split('-')[0])) {
-                        console.log(`找到匹配的元素: ${el.id}`);
-                        $peer = el;
-                        break;
-                    }
-                }
-            }
+            // 发送通知
+            Events.fire('notify-user', {
+                message: message,
+                timeout: 3000
+            });
+            
+            // 清空更新的设备集合
+            PeersUI._updatedPeers.clear();
         }
-        
-        if (!$peer) {
-            console.warn(`无法找到ID为 ${peer.id} 的设备DOM元素`);
-            // 记录所有peer元素以辅助调试
-            console.log('可能需要手动刷新页面以更新所有设备信息');
-            return;
-        }
-        
-        // 添加一个数据属性记录原始的peer ID，方便未来查找
-        $peer.dataset.originalPeerId = peer.id;
-        
-        // 更新显示名称
-        const $name = $peer.querySelector('.name');
-        if ($name) {
-            const oldName = $name.textContent;
-            $name.textContent = peer.name.displayName;
-            console.log(`设备 ${peer.id} 名称从 "${oldName}" 更新为 "${peer.name.displayName}"`);
-        } else {
-            console.warn(`无法找到设备 ${peer.id} 的名称DOM元素`);
-        }
-        
-        // 更新设备名称
-        const $deviceName = $peer.querySelector('.device-name');
-        if ($deviceName) {
-            const oldDeviceName = $deviceName.textContent;
-            $deviceName.textContent = peer.name.deviceName;
-            console.log(`设备 ${peer.id} 设备名称从 "${oldDeviceName}" 更新为 "${peer.name.deviceName}"`);
-        } else {
-            console.warn(`无法找到设备 ${peer.id} 的设备名称DOM元素`);
-        }
-        
-        // 触发UI更新动画或其他视觉反馈
-        $peer.classList.add('updated');
-        setTimeout(() => {
-            $peer.classList.remove('updated');
-        }, 2000);
-        
-        console.log(`设备 ${peer.id} 信息更新完成`);
     }
 }
 
@@ -231,19 +214,35 @@ class PeerUI {
 
     html() {
         return `
-            <label class="column center" title="Click to send files or right click to send a text">
-                <input type="file" multiple>
-                <x-icon shadow="1">
-                    <svg class="icon" viewBox="0 0 24 24">${this._iconPath()}</svg>
-                </x-icon>
-                <div class="progress">
-                  <div class="circle"></div>
-                  <div class="circle right"></div>
+            <div class="card-wrapper">
+                <label class="column center" title="点击发送文件或右键点击发送消息">
+                    <input type="file" multiple>
+                    <div class="card-content">
+                        <x-icon shadow="1">
+                            <svg class="icon" viewBox="0 0 24 24">${this._iconPath()}</svg>
+                        </x-icon>
+                        <div class="progress">
+                            <div class="circle"></div>
+                            <div class="circle right"></div>
+                        </div>
+                        <div class="name font-subheading"></div>
+                        <div class="device-name font-body2"></div>
+                        <div class="status font-body2"></div>
+                    </div>
+                </label>
+                <div class="card-actions">
+                    <div class="action-button send-file" title="发送文件">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm-2 16c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm2-10V3.5L18.5 9H14z"></path>
+                        </svg>
+                    </div>
+                    <div class="action-button send-text" title="发送消息">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"></path>
+                        </svg>
+                    </div>
                 </div>
-                <div class="name font-subheading"></div>
-                <div class="device-name font-body2"></div>
-                <div class="status font-body2"></div>
-            </label>`
+            </div>`
     }
 
     constructor(peer) {
@@ -259,6 +258,13 @@ class PeerUI {
         el.ui = this;
         el.querySelector('.name').textContent = this._displayName();
         el.querySelector('.device-name').textContent = this._deviceName();
+        
+        // 检测是否为长名称，如果是则添加特殊类
+        const displayName = this._displayName();
+        if (displayName && displayName.length > 12) {
+            el.classList.add('long-name');
+        }
+        
         this.$el = el;
         this.$progress = el.querySelector('.progress');
     }
@@ -272,6 +278,26 @@ class PeerUI {
         el.addEventListener('contextmenu', e => this._onRightClick(e));
         el.addEventListener('touchstart', e => this._onTouchStart(e));
         el.addEventListener('touchend', e => this._onTouchEnd(e));
+        
+        // 添加卡片操作按钮事件
+        const sendFileBtn = el.querySelector('.action-button.send-file');
+        if (sendFileBtn) {
+            sendFileBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                e.preventDefault(); // 阻止默认行为，防止label触发input
+                el.querySelector('input[type="file"]').click();
+            });
+        }
+        
+        const sendTextBtn = el.querySelector('.action-button.send-text');
+        if (sendTextBtn) {
+            sendTextBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                e.preventDefault(); // 阻止默认行为，防止label触发
+                Events.fire('text-recipient', this._peer.id);
+            });
+        }
+        
         // prevent browser's default file drop behavior
         Events.on('dragover', e => e.preventDefault());
         Events.on('drop', e => e.preventDefault());
@@ -693,11 +719,90 @@ class Toast extends Dialog {
         Events.on('notify-user', (e) => this._onNotify(e.detail));
         this.$toast = $('toast');
         this._timeout = null;
+        this._toastQueue = []; // 通知队列
+        this._isShowingToast = false; // 当前是否正在显示通知
+        this._activeNotifications = {}; // 跟踪活跃通知，按ID索引
     }
 
     _onNotify(detail) {
         // 如果传入的是字符串，则转换为对象格式
-        const message = typeof detail === 'string' ? { message: detail, persistent: false } : detail;
+        const message = typeof detail === 'string' ? { message: detail, timeout: 3000 } : detail;
+        
+        // 处理清除所有通知的情况
+        if (message.type === 'clearAll') {
+            this._toastQueue = [];
+            this._isShowingToast = false;
+            if (this._timeout) {
+                clearTimeout(this._timeout);
+                this._timeout = null;
+            }
+            this.hide();
+            
+            // 如果有新消息，则显示
+            if (message.message) {
+                setTimeout(() => {
+                    this._toastQueue.push(message);
+                    this._showNextToast();
+                }, 300);
+            }
+            return;
+        }
+        
+        // 如果有ID，且是替换已有通知
+        if (message.id && this._activeNotifications[message.id]) {
+            // 如果当前正在显示的是这个ID的通知，直接替换内容
+            if (this._currentToastId === message.id) {
+                this.$toast.textContent = message.message;
+                
+                // 如果设置了超时，更新超时
+                if (message.timeout && !message.persistent) {
+                    if (this._timeout) {
+                        clearTimeout(this._timeout);
+                    }
+                    this._timeout = setTimeout(() => {
+                        this.hide();
+                        delete this._activeNotifications[message.id];
+                        this._currentToastId = null;
+                        setTimeout(() => this._showNextToast(), 300);
+                    }, message.timeout);
+                }
+                return;
+            }
+            
+            // 如果在队列中，则替换队列中的消息
+            const index = this._toastQueue.findIndex(toast => toast.id === message.id);
+            if (index !== -1) {
+                this._toastQueue[index] = message;
+                return;
+            }
+        }
+        
+        // 记录活跃通知
+        if (message.id) {
+            this._activeNotifications[message.id] = true;
+        }
+        
+        // 将消息添加到队列
+        this._toastQueue.push(message);
+        
+        // 如果当前没有显示通知，则显示队列中的第一条
+        if (!this._isShowingToast) {
+            this._showNextToast();
+        }
+    }
+    
+    _showNextToast() {
+        if (this._toastQueue.length === 0) {
+            this._isShowingToast = false;
+            this._currentToastId = null;
+            return;
+        }
+        
+        this._isShowingToast = true;
+        const message = this._toastQueue.shift();
+        
+        // 保存当前显示的通知ID
+        this._currentToastId = message.id || null;
         
         // 清除之前的超时
         if (this._timeout) {
@@ -711,9 +816,32 @@ class Toast extends Dialog {
         // 显示消息
         this.show();
         
+        // 设置消息的超时时间
+        const timeout = message.timeout || 3000;
+        
         // 如果不是常驻消息，则设置超时隐藏
         if (!message.persistent) {
-            this._timeout = setTimeout(_ => this.hide(), 5000);
+            this._timeout = setTimeout(() => {
+                this.hide();
+                if (message.id) {
+                    delete this._activeNotifications[message.id];
+                }
+                this._currentToastId = null;
+                // 等待动画结束后显示下一条消息
+                setTimeout(() => this._showNextToast(), 300);
+            }, timeout);
+        }
+    }
+    
+    hide() {
+        super.hide();
+        
+        // 如果还有队列中的消息，则在隐藏动画完成后显示下一条
+        if (this._toastQueue.length > 0 && !this._timeout) {
+            setTimeout(() => this._showNextToast(), 300);
+        } else if (this._toastQueue.length === 0) {
+            this._isShowingToast = false;
+            this._currentToastId = null;
         }
     }
 }

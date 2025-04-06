@@ -191,6 +191,19 @@ class SnapdropServer {
             case 'pong':
                 sender.lastBeat = Date.now();
                 break;
+            case 'refresh-connection':
+                // 处理客户端刷新连接请求
+                log(`收到设备 ${sender.id} 的连接刷新请求`);
+                // 更新最后心跳时间
+                sender.lastBeat = Date.now();
+                // 发送确认消息
+                this._send(sender, {
+                    type: 'connection-refreshed',
+                    timestamp: Date.now()
+                });
+                // 通知其他设备此设备仍然活跃
+                this._notifyPeerUpdate(sender);
+                break;
             case 'user-info':
                 // 处理用户信息更新
                 if (message.userName || message.deviceName) {

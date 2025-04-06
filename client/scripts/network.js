@@ -1,6 +1,9 @@
 window.URL = window.URL || window.webkitURL;
 window.isRtcSupported = !!(window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection);
 
+// 定义常量
+const FILE_CHUNK_SIZE = 256 * 1024; // 固定块大小为256KB
+
 // 尝试获取系统用户名或浏览器信息
 function getUserInfo() {
     try {
@@ -123,17 +126,19 @@ class ServerConnection {
                 
                 this._startHeartbeat();
                 
-                Events.fire('notify-user', {
-                    message: '连接已恢复',
-                    timeout: 3000,
-                    persistent: false,
-                    type: 'clearAll'
-                });
-                
+                // 清除倒计时计时器
                 if (this._countdownTimer) {
                     clearInterval(this._countdownTimer);
                     this._countdownTimer = null;
                 }
+                
+                // 清除断开连接通知，显示连接成功通知
+                Events.fire('notify-user', {
+                    message: '连接已恢复',
+                    timeout: 3000,
+                    type: 'clearAll',
+                    id: 'connection-countdown' // 匹配断开通知的ID
+                });
             };
             
             ws.onmessage = e => {
@@ -184,6 +189,13 @@ class ServerConnection {
             case 'ping':
                 this.send({ type: 'pong' });
                 break;
+            case 'connection-refreshed':
+                console.log(`服务器确认连接已刷新，时间戳: ${msg.timestamp}`);
+                // 触发连接刷新成功事件，供其他组件使用
+                Events.fire('connection-refreshed', {
+                    timestamp: msg.timestamp
+                });
+                break;
             case 'set-cookie':
                 if (msg.cookie) {
                     // 解析cookie并在本地存储
@@ -211,12 +223,14 @@ class ServerConnection {
                 Events.fire('display-name', msg);
                 break;
             case 'file':
+                // 文件元数据处理 - 预备接收文件
                 if (!this._fileInfo) this._fileInfo = {};
                 
                 const fileId = msg.fileId || msg.sender;
                 
                 const existingInfo = this._fileInfo[fileId];
                 if (existingInfo && existingInfo.isTemporary) {
+                    // 存在临时记录时，合并信息
                     console.log(`收到文件元数据，合并现有临时记录: ${msg.name}`);
                     
                     const existingData = existingInfo.data;
@@ -233,7 +247,7 @@ class ServerConnection {
                         fileId: msg.fileId,
                         bytesReceived: existingBytesReceived,
                         chunksReceived: existingChunksReceived,
-                        totalChunks: Math.ceil(msg.size / (256 * 1024)),
+                        totalChunks: Math.ceil(msg.size / FILE_CHUNK_SIZE), // 使用统一的块大小常量
                         data: existingData,
                         chunksWithIndex: existingChunks,
                         pendingChunks: existingPendingChunks,
@@ -242,6 +256,7 @@ class ServerConnection {
                     
                     console.log(`合并后的文件信息: ${msg.name}, 已接收 ${existingChunksReceived} 块, ${existingBytesReceived} 字节`);
                 } else {
+                    // 创建新的文件信息记录
                     this._fileInfo[fileId] = {
                         name: msg.name,
                         mime: msg.mime,
@@ -250,8 +265,11 @@ class ServerConnection {
                         fileId: msg.fileId,
                         bytesReceived: 0,
                         chunksReceived: 0,
-                        totalChunks: Math.ceil(msg.size / (256 * 1024)),
-                        data: []
+                        totalChunks: Math.ceil(msg.size / FILE_CHUNK_SIZE), // 使用统一的块大小常量
+                        data: [],
+                        chunksWithIndex: [], // 添加索引跟踪
+                        createdAt: Date.now(),
+                        lastUpdated: Date.now()
                     };
                     
                     console.log(`接收文件元数据: ${msg.name}, 大小: ${msg.size} 字节, FileID: ${msg.fileId || '未指定'}`);
@@ -452,15 +470,35 @@ class ServerConnection {
     }
 
     sendBinary(buffer) {
-        if (!this._socket || this._socket.readyState !== WebSocket.OPEN) return;
+        if (!this._socket || this._socket.readyState !== WebSocket.OPEN) {
+            console.error('WebSocket连接未打开，无法发送二进制数据');
+            Events.fire('notify-user', {
+                message: '连接已断开，无法发送数据',
+                timeout: 3000
+            });
+            return false;
+        }
         
         if (!this.lastSendPeerId) {
             console.error('Cannot send binary data: No recipient specified');
-            Events.fire('notify-user', '无法发送二进制数据：未指定接收方');
-            return;
+            Events.fire('notify-user', {
+                message: '无法发送二进制数据：未指定接收方',
+                timeout: 3000
+            });
+            return false;
         }
         
-        this._socket.send(buffer);
+        try {
+            this._socket.send(buffer);
+            return true;
+        } catch (error) {
+            console.error('发送二进制数据时出错：', error);
+            Events.fire('notify-user', {
+                message: '发送数据失败，请重试',
+                timeout: 3000
+            });
+            return false;
+        }
     }
 
     _endpoint() {
@@ -478,33 +516,51 @@ class ServerConnection {
     _onDisconnect() {
         console.log('WS: 服务器已断开连接');
         
+        // 清除现有的计时器
         if (this._countdownTimer) {
             clearInterval(this._countdownTimer);
+            this._countdownTimer = null;
         }
         clearTimeout(this._reconnectTimer);
         
+        // 设置倒计时时间（秒）
         const countdownTime = 5;
         let remainingTime = countdownTime;
         
+        // 显示初始通知
         Events.fire('notify-user', {
             message: `连接已断开，${remainingTime}秒后重试...`,
-            persistent: true
+            persistent: true,
+            id: 'connection-countdown' // 添加ID便于后续更新或清除
         });
         
+        // 设置倒计时计时器
         this._countdownTimer = setInterval(() => {
             remainingTime--;
-            if (remainingTime <= 0) {
+            
+            // 更新剩余时间通知
+            if (remainingTime > 0) {
+                Events.fire('notify-user', {
+                    message: `连接已断开，${remainingTime}秒后重试...`,
+                    persistent: true,
+                    id: 'connection-countdown'
+                });
+            } else {
+                // 倒计时结束，清除计时器
                 clearInterval(this._countdownTimer);
-                return;
+                this._countdownTimer = null;
+                
+                // 显示正在连接的消息
+                Events.fire('notify-user', {
+                    message: '正在尝试重新连接...',
+                    persistent: true,
+                    id: 'connection-countdown'
+                });
             }
-            Events.fire('notify-user', {
-                message: `连接已断开，${remainingTime}秒后重试...`,
-                persistent: true
-            });
         }, 1000);
         
-        this._reconnectTimer = setTimeout(_ => {
-            clearInterval(this._countdownTimer);
+        // 设置重连计时器
+        this._reconnectTimer = setTimeout(() => {
             this._connect();
         }, countdownTime * 1000);
     }
@@ -631,15 +687,18 @@ class ServerConnection {
     }
 
     _finalizeFileTransfer(fileInfo, senderId, fileKey) {
+        // 防止重复处理
         if (fileInfo._finalized) {
             return;
         }
         
+        // 跳过处理临时文件记录
         if (fileInfo.isTemporary) {
             console.log(`跳过处理临时文件记录 (${fileInfo.name}), 等待完整元数据`);
             return;
         }
         
+        // 清理所有定时器
         if (fileInfo._finalizeRetryTimer) {
             clearTimeout(fileInfo._finalizeRetryTimer);
             fileInfo._finalizeRetryTimer = null;
@@ -650,15 +709,18 @@ class ServerConnection {
             fileInfo._completionTimer = null;
         }
         
+        // 检查文件是否接收完整
         if (fileInfo.size > 0 && fileInfo.bytesReceived < fileInfo.size * 0.98) {
             console.warn(`文件数据不完整: ${fileInfo.name} - 仅接收到 ${Math.floor(fileInfo.bytesReceived/fileInfo.size*100)}%`);
             
+            // 尝试3次后才放弃重试
             if (fileInfo._finalizeAttempts && fileInfo._finalizeAttempts >= 3) {
                 console.warn(`已尝试多次完成文件，将尝试处理已接收的部分`);
             } else {
                 fileInfo._finalizeAttempts = (fileInfo._finalizeAttempts || 0) + 1;
                 console.log(`等待更多数据，这是第 ${fileInfo._finalizeAttempts} 次尝试`);
                 
+                // 设置延迟重试
                 fileInfo._finalizeRetryTimer = setTimeout(() => {
                     console.log(`延迟完成文件: ${fileInfo.name}`);
                     this._finalizeFileTransfer(fileInfo, senderId, fileKey);
@@ -667,6 +729,7 @@ class ServerConnection {
             }
         }
         
+        // 标记为已完成，防止重复处理
         fileInfo._finalized = true;
         
         console.log(`开始处理文件 ${fileInfo.name}, 大小: ${fileInfo.bytesReceived}/${fileInfo.size} 字节, 收到块数: ${fileInfo.chunksReceived}/${fileInfo.totalChunks}`);
@@ -790,12 +853,27 @@ class ServerConnection {
     }
     
     _resetHeartbeat() {
+        // 重置心跳计时器，确保连接保持活跃
+        if (this._heartbeatTimeout) {
+            clearTimeout(this._heartbeatTimeout);
+        }
+        
+        this._heartbeatTimeout = setTimeout(() => {
+            if (this._isConnected()) {
+                this.send({ type: 'heartbeat' });
+            }
+        }, 30000);
     }
     
     _stopHeartbeat() {
         if (this._heartbeatInterval) {
             clearInterval(this._heartbeatInterval);
             this._heartbeatInterval = null;
+        }
+        
+        if (this._heartbeatTimeout) {
+            clearTimeout(this._heartbeatTimeout);
+            this._heartbeatTimeout = null;
         }
     }
 }
@@ -878,15 +956,16 @@ class Peer {
     }
 
     _onFileReceived(proxyFile) {
+        // 触发一次文件接收事件
         Events.fire('file-received', proxyFile);
         
-        const peerName = this._peerId ? document.querySelector('[data-peer-id="' + this._peerId + '"] .name').textContent : '';
-        Events.fire('file-received', {
-            name: proxyFile.name,
-            mime: proxyFile.mime,
-            size: proxyFile.size,
-            peerName: peerName
-        });
+        // 获取对等方名称用于显示
+        const peerName = this._peerId ? document.querySelector('[data-peer-id="' + this._peerId + '"] .name')?.textContent : '';
+        
+        // 只添加额外的peerName信息，避免触发新事件
+        if (peerName) {
+            proxyFile.peerName = peerName;
+        }
     }
 
     _onTransferCompleted() {
@@ -1004,7 +1083,13 @@ class RTCPeer extends Peer {
 
     _onChannelClosed() {
         console.log('RTC: 通道关闭', this._peerId);
-        if (!this.isCaller) return;
+        if (!this._isCaller) {
+            console.log('RTC: 非调用者尝试重连');
+            setTimeout(() => {
+                this._connect(this._peerId, false);
+            }, 1000);
+            return;
+        }
         this._connect(this._peerId, true);
     }
 
@@ -1057,6 +1142,36 @@ class RTCPeer extends Peer {
 
     _isConnecting() {
         return this._channel && this._channel.readyState === 'connecting';
+    }
+
+    // 添加destroy方法清理资源
+    destroy() {
+        console.log(`RTCPeer: 清理资源 (${this._peerId})`);
+        
+        // 关闭数据通道
+        if (this._channel) {
+            this._channel.onmessage = null;
+            this._channel.onclose = null;
+            this._channel.onopen = null;
+            
+            if (this._channel.readyState === 'open') {
+                this._channel.close();
+            }
+            this._channel = null;
+        }
+        
+        // 关闭RTC连接
+        if (this._conn) {
+            this._conn.onicecandidate = null;
+            this._conn.onconnectionstatechange = null;
+            this._conn.oniceconnectionstatechange = null;
+            this._conn.ondatachannel = null;
+            
+            if (this._conn.signalingState !== 'closed') {
+                this._conn.close();
+            }
+            this._conn = null;
+        }
     }
 }
 
@@ -1184,9 +1299,22 @@ class PeersManager {
 
     _onPeerLeft(peerId) {
         const peer = this.peers[peerId];
-        delete this.peers[peerId];
-        if (!peer || !peer._peer) return;
-        peer._peer.close();
+        if (peer) {
+            // 调用destroy方法清理资源
+            if (typeof peer.destroy === 'function') {
+                console.log(`调用peer.destroy()清理资源: ${peerId}`);
+                peer.destroy();
+            }
+            
+            // 如果有_peer对象，关闭它
+            if (peer._peer) {
+                peer._peer.close();
+            }
+            
+            // 删除peer引用
+            delete this.peers[peerId];
+            console.log(`移除了peer: ${peerId}`);
+        }
     }
 
     _onPeerJoined(peer) {
@@ -1210,6 +1338,25 @@ class WSPeer {
         this._server = server;
         this._peerId = peerId;
         this._fileTransfer = new WSFileTransferAdapter(this, this._peerId, this._server);
+        this._isConnecting = false;
+        this._reconnectTimeout = null;
+        
+        // 监听连接刷新事件
+        this._connectionRefreshedHandler = e => this._onConnectionRefreshed(e.detail);
+        Events.on('connection-refreshed', this._connectionRefreshedHandler);
+    }
+    
+    _onConnectionRefreshed(detail) {
+        if (this._isConnecting) {
+            console.log(`WSPeer: 收到连接刷新确认，重置连接状态 (${this._peerId})`);
+            this._isConnecting = false;
+            
+            // 通知UI连接已刷新
+            Events.fire('notify-user', {
+                message: `与 ${this._peerId} 的连接已刷新`,
+                timeout: 1500
+            });
+        }
     }
 
     _send(message) {
@@ -1236,6 +1383,45 @@ class WSPeer {
     }
 
     refresh() {
+        // 避免重复刷新
+        if (this._isConnecting) return;
+        this._isConnecting = true;
+        
+        console.log(`WSPeer: 尝试刷新与 ${this._peerId} 的连接`);
+        
+        // 清除之前的重连定时器
+        if (this._reconnectTimeout) {
+            clearTimeout(this._reconnectTimeout);
+        }
+        
+        // 通知服务器刷新连接
+        this._send({
+            type: 'refresh-connection'
+        });
+        
+        // 设置状态重置定时器，以防服务器未响应
+        this._reconnectTimeout = setTimeout(() => {
+            if (this._isConnecting) {
+                this._isConnecting = false;
+                console.log(`WSPeer: 刷新与 ${this._peerId} 的连接超时，重置状态`);
+                
+                // 通知用户刷新失败
+                Events.fire('notify-user', {
+                    message: `刷新与 ${this._peerId} 的连接失败`,
+                    timeout: 3000
+                });
+            }
+        }, 5000);
+    }
+    
+    // 在对象销毁时移除事件监听器
+    destroy() {
+        Events.off('connection-refreshed', this._connectionRefreshedHandler);
+        
+        if (this._reconnectTimeout) {
+            clearTimeout(this._reconnectTimeout);
+            this._reconnectTimeout = null;
+        }
     }
 }
 
@@ -1273,7 +1459,7 @@ class FileTransfer {
                 fileId: fileId
             });
             
-            const chunkSize = 256 * 1024;
+            const chunkSize = FILE_CHUNK_SIZE;
             let offset = 0;
             let chunkCount = Math.ceil(file.size / chunkSize);
             let sentChunks = 0;
@@ -1316,6 +1502,13 @@ class FileTransfer {
                         await new Promise(resolve => setTimeout(resolve, 2));
                     } catch (error) {
                         console.error(`处理文件块错误 (${chunkIndex+1}/${chunkCount}):`, error);
+                        
+                        // 通知用户传输中断
+                        Events.fire('notify-user', {
+                            message: `文件 ${file.name} 传输中断，正在重试...`,
+                            timeout: 2000
+                        });
+                        
                         let retries = 0;
                         let success = false;
                         
@@ -1496,7 +1689,7 @@ RTCPeer.config = {
 
 class FileChunker {
     constructor(file, onChunk) {
-        this._chunkSize = 256000;
+        this._chunkSize = FILE_CHUNK_SIZE;
         this._offset = 0;
         this._file = file;
         this._onChunk = onChunk;

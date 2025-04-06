@@ -40,6 +40,7 @@
 
 <body translate="no">
     <header class="row-reverse">
+        <div class="app-title">讯传</div>
     </header>
     <!-- Peers -->
     <x-peers class="center"></x-peers>
@@ -48,11 +49,16 @@
     </x-no-peers>
     <x-instructions desktop="点击发送文件或右键点击发送消息" mobile="点击发送文件或长按发送消息"></x-instructions>
     <!-- Footer -->
-    <footer class="column">
+    <footer class="column center">
         <svg class="icon logo">
             <use xlink:href="#wifi-tethering" />
         </svg>
-        <div id="displayName" placeholder="跨设备传输数据的最简单方式"></div>
+        <div class="device-name-container">
+            <div id="displayName" title="点击修改您的设备名称" class="font-subheading" placeholder="跨设备传输数据的最简单方式"></div>
+            <svg class="icon edit-icon" id="editNameIcon" title="点击修改名称">
+                <use xlink:href="#edit-pencil"></use>
+            </svg>
+        </div>
         <div class="font-body2">此网络中的所有人都能发现您</div>
     </footer>
     <!-- Receive Dialog -->
@@ -105,8 +111,8 @@
         </x-background>
     </x-dialog>
     <!-- Toast -->
-    <div class="toast-container full center">
-        <x-toast class="row" shadow="1" id="toast">文件传输完成</x-toast>
+    <div class="toast-container">
+        <x-toast class="row" shadow="1" id="toast">消息通知</x-toast>
     </div>
     <!-- About Page -->
     <x-about id="about" class="full center column">
@@ -218,6 +224,9 @@
         </symbol>
         <symbol id="insert-drive-file" viewBox="0 0 24 24">
             <path d="M6 2c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6H6zm7 7V3.5L18.5 9H13z"></path>
+        </symbol>
+        <symbol id="edit-pencil" viewBox="0 0 24 24">
+            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
         </symbol>
     </svg>
     <!-- Scripts -->
