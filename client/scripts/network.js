@@ -49,10 +49,30 @@ class ServerConnection {
         // 监听用户名更新事件
         window.addEventListener('update-user-name', e => {
             if (this._isConnected()) {
+                console.log(`正在向服务器发送用户名更新: ${e.detail}`);
                 this.send({
                     type: 'user-info',
                     userName: e.detail
                 });
+            } else {
+                console.warn('无法发送用户名更新，WS连接尚未建立');
+                // 尝试连接后再发送
+                this._connect();
+                setTimeout(() => {
+                    if (this._isConnected()) {
+                        console.log(`连接建立后发送用户名更新: ${e.detail}`);
+                        this.send({
+                            type: 'user-info',
+                            userName: e.detail
+                        });
+                    } else {
+                        console.error('连接失败，无法发送用户名更新');
+                        Events.fire('notify-user', {
+                            message: '连接服务器失败，无法更新名称',
+                            timeout: 3000
+                        });
+                    }
+                }, 1000);
             }
         });
     }

@@ -211,9 +211,9 @@ class SnapdropServer {
                             const encodedUserName = encodeURIComponent(message.userName);
                             sender.socket.send(JSON.stringify({
                                 type: 'set-cookie',
-                                cookie: `username=${encodedUserName}; SameSite=Strict; Secure; Max-Age=31536000` // 一年有效期
+                                cookie: `username=${encodedUserName}; SameSite=Strict; Secure; Max-Age=31536000; Path=/` // 一年有效期
                             }));
-                            log(`已为用户 ${sender.id} 设置用户名cookie`);
+                            log(`已为用户 ${sender.id} 设置用户名cookie: ${encodedUserName}`);
                         } catch (e) {
                             log(`设置用户名cookie时出错: ${e.message}`);
                         }
@@ -228,7 +228,7 @@ class SnapdropServer {
                         log(`用户 ${sender.id} 更新设备信息为: ${message.deviceName}`);
                     }
                     
-                    // 如果有更新，通知用户
+                    // 如果有更新，通知用户自己
                     if (displayNameUpdated) {
                         this._send(sender, {
                             type: 'display-name',
@@ -240,6 +240,7 @@ class SnapdropServer {
                         });
                         
                         // 通知其他用户此用户更新了名称
+                        log(`正在广播用户 ${sender.id} (${sender.name.displayName}) 的名称更新到所有设备`);
                         this._notifyPeerUpdate(sender);
                     }
                 }

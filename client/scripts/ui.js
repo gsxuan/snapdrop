@@ -44,15 +44,40 @@ document.addEventListener('DOMContentLoaded', () => {
     // 添加更新动画样式
     const style = document.createElement('style');
     style.textContent = `
+        x-peer.updated {
+            position: relative;
+        }
+        
+        x-peer.updated::after {
+            content: '已更新';
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: #2196F3;
+            color: white;
+            border-radius: 10px;
+            padding: 3px 8px;
+            font-size: 10px;
+            animation: fadeOut 2s forwards;
+            z-index: 10;
+        }
+        
         x-peer.updated .name {
             animation: highlight-update 2s ease-in-out;
+            font-weight: bold;
         }
         
         @keyframes highlight-update {
             0% { color: inherit; }
             30% { color: #2196F3; }
             70% { color: #2196F3; }
-            100% { color: inherit; }
+            100% { color: inherit; font-weight: normal; }
+        }
+        
+        @keyframes fadeOut {
+            0% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { opacity: 0; }
         }
     `;
     document.head.appendChild(style);
@@ -118,11 +143,59 @@ class PeersUI {
     _onPeerUpdated(peer) {
         console.log(`收到设备 ${peer.id} 的信息更新`, peer);
         
-        const $peer = $(peer.id);
+        // 尝试多种选择器找到对应元素
+        let $peer = $(peer.id);
+        
+        // 如果直接ID查找失败，记录所有peer元素ID以辅助调试
+        if (!$peer) {
+            const allPeers = document.querySelectorAll('x-peer');
+            const peerIds = Array.from(allPeers).map(el => el.id);
+            console.log('当前所有peer元素ID:', peerIds);
+            
+            // 尝试部分ID匹配
+            if (peer.id.includes('-')) {
+                // 提取基本ID部分（UUID部分）
+                const baseId = peer.id.split('-')[0];
+                console.log(`尝试查找基本ID: ${baseId}`);
+                
+                for (const el of allPeers) {
+                    if (el.id.startsWith(baseId)) {
+                        console.log(`找到匹配的元素: ${el.id}`);
+                        $peer = el;
+                        break;
+                    }
+                }
+            }
+            
+            // 如果仍未找到，尝试直接遍历所有peer元素
+            if (!$peer) {
+                console.log('尝试遍历所有peer元素查找匹配项...');
+                for (const el of allPeers) {
+                    const datasetId = el.dataset.peerId;
+                    console.log(`检查元素: id=${el.id}, data-peer-id=${datasetId}`);
+                    
+                    // 检查id的不同部分是否匹配
+                    if (el.id === peer.id || 
+                        (datasetId && datasetId === peer.id) ||
+                        (peer.id.includes('-') && el.id.includes('-') && 
+                         peer.id.split('-')[0] === el.id.split('-')[0])) {
+                        console.log(`找到匹配的元素: ${el.id}`);
+                        $peer = el;
+                        break;
+                    }
+                }
+            }
+        }
+        
         if (!$peer) {
             console.warn(`无法找到ID为 ${peer.id} 的设备DOM元素`);
+            // 记录所有peer元素以辅助调试
+            console.log('可能需要手动刷新页面以更新所有设备信息');
             return;
         }
+        
+        // 添加一个数据属性记录原始的peer ID，方便未来查找
+        $peer.dataset.originalPeerId = peer.id;
         
         // 更新显示名称
         const $name = $peer.querySelector('.name');
