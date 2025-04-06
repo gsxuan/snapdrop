@@ -11,6 +11,30 @@ Events.on('display-name', e => {
     const $displayName = $('displayName')
     $displayName.textContent = '您的名称为 ' + me.displayName;
     $displayName.title = me.deviceName;
+    $displayName.dataset.selfId = me.peerId || me.selfId;
+    
+    // 点击名称可以修改
+    if (!$displayName.hasSetClickHandler) {
+        $displayName.hasSetClickHandler = true;
+        $displayName.addEventListener('click', () => {
+            const currentName = me.displayName;
+            const newName = prompt('请输入您想要的显示名称', currentName);
+            
+            if (newName && newName.trim() && newName !== currentName) {
+                // 保存到localStorage
+                localStorage.setItem('user-display-name', newName);
+                
+                // 发送到服务器
+                const event = new CustomEvent('update-user-name', {
+                    detail: newName
+                });
+                window.dispatchEvent(event);
+                
+                // 临时更新显示
+                $displayName.textContent = '您的名称为 ' + newName;
+            }
+        });
+    }
 });
 
 // 页面加载完成后初始化版本号显示
@@ -26,6 +50,7 @@ class PeersUI {
         Events.on('peers', e => this._onPeers(e.detail));
         Events.on('file-progress', e => this._onFileProgress(e.detail));
         Events.on('paste', e => this._onPaste(e));
+        Events.on('peer-updated', e => this._onPeerUpdated(e.detail));
     }
 
     _onPeerJoined(peer) {
@@ -72,6 +97,25 @@ class PeersUI {
                 to: $$('x-peer').id
             });
         }
+    }
+
+    _onPeerUpdated(peer) {
+        const $peer = $(peer.id);
+        if (!$peer) return;
+        
+        // 更新显示名称
+        const $name = $peer.querySelector('.name');
+        if ($name) {
+            $name.textContent = peer.name.displayName;
+        }
+        
+        // 更新设备名称
+        const $deviceName = $peer.querySelector('.device-name');
+        if ($deviceName) {
+            $deviceName.textContent = peer.name.deviceName;
+        }
+        
+        console.log(`设备 ${peer.id} 信息已更新`);
     }
 }
 

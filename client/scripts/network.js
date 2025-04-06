@@ -1,6 +1,38 @@
 window.URL = window.URL || window.webkitURL;
 window.isRtcSupported = !!(window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection);
 
+// 尝试获取系统用户名或浏览器信息
+function getUserInfo() {
+    try {
+        // 尝试获取系统用户名
+        if (window.navigator && window.navigator.userAgentData && window.navigator.userAgentData.getHighEntropyValues) {
+            return window.navigator.userAgentData.getHighEntropyValues(['platform', 'platformVersion', 'model'])
+                .then(ua => {
+                    return {
+                        deviceName: ua.platform + ' ' + ua.platformVersion,
+                        model: ua.model
+                    };
+                })
+                .catch(err => {
+                    console.log('无法获取高熵值:', err);
+                    return null;
+                });
+        }
+        
+        // 尝试从localStorage获取用户设置的名称
+        const savedName = localStorage.getItem('user-display-name');
+        if (savedName) {
+            return Promise.resolve({
+                userName: savedName
+            });
+        }
+    } catch (e) {
+        console.log('获取用户信息时出错:', e);
+    }
+    
+    return Promise.resolve(null);
+}
+
 class ServerConnection {
 
     constructor() {
@@ -13,6 +45,16 @@ class ServerConnection {
         this._lastBinaryId = null;
         this.lastSendPeerId = null;
         this._selfId = null;
+        
+        // 监听用户名更新事件
+        window.addEventListener('update-user-name', e => {
+            if (this._isConnected()) {
+                this.send({
+                    type: 'user-info',
+                    userName: e.detail
+                });
+            }
+        });
     }
 
     _connect() {
@@ -22,59 +64,82 @@ class ServerConnection {
         const url = this._endpoint();
         console.log('连接到WS服务器:', url);
         
-        const ws = new WebSocket(url);
-        ws.binaryType = 'arraybuffer';
-        
-        const connectionTimeout = setTimeout(() => {
-            if (ws.readyState !== WebSocket.OPEN) {
-                console.log('WS: 连接超时，关闭并重试');
-                ws.close();
-                this._reconnectTimer = setTimeout(() => this._connect(), 1000);
+        // 获取用户信息
+        getUserInfo().then(userInfo => {
+            const ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+            
+            // 如果获取到了用户信息，添加到请求头中
+            if (userInfo) {
+                if (userInfo.userName) {
+                    ws.userName = userInfo.userName;
+                }
+                if (userInfo.deviceName) {
+                    ws.deviceName = userInfo.deviceName;
+                }
             }
-        }, 5000);
-        
-        ws.onopen = e => {
-            clearTimeout(connectionTimeout);
-            console.log('WS: 服务器已连接');
             
-            this._startHeartbeat();
+            const connectionTimeout = setTimeout(() => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    console.log('WS: 连接超时，关闭并重试');
+                    ws.close();
+                    this._reconnectTimer = setTimeout(() => this._connect(), 1000);
+                }
+            }, 5000);
             
-            Events.fire('notify-user', {
-                message: '连接已恢复',
-                timeout: 3000,
-                persistent: false,
-                type: 'clearAll'
-            });
+            ws.onopen = e => {
+                clearTimeout(connectionTimeout);
+                console.log('WS: 服务器已连接');
+                
+                // 连接成功后发送用户信息
+                if (userInfo) {
+                    this.send({
+                        type: 'user-info',
+                        userName: userInfo.userName,
+                        deviceName: userInfo.deviceName,
+                        model: userInfo.model
+                    });
+                }
+                
+                this._startHeartbeat();
+                
+                Events.fire('notify-user', {
+                    message: '连接已恢复',
+                    timeout: 3000,
+                    persistent: false,
+                    type: 'clearAll'
+                });
+                
+                if (this._countdownTimer) {
+                    clearInterval(this._countdownTimer);
+                    this._countdownTimer = null;
+                }
+            };
             
-            if (this._countdownTimer) {
-                clearInterval(this._countdownTimer);
-                this._countdownTimer = null;
-            }
-        };
-        
-        ws.onmessage = e => {
-            this._resetHeartbeat();
+            ws.onmessage = e => {
+                this._resetHeartbeat();
+                
+                if (e.data instanceof ArrayBuffer) {
+                    this._onBinaryData(e.data);
+                } else {
+                    this._onMessage(e.data);
+                }
+            };
             
-            if (e.data instanceof ArrayBuffer) {
-                this._onBinaryData(e.data);
-            } else {
-                this._onMessage(e.data);
-            }
-        };
-        
-        ws.onclose = e => {
-            clearTimeout(connectionTimeout);
-            this._stopHeartbeat();
-            this._onDisconnect();
-        };
-        
-        ws.onerror = e => {
-            console.error('WS错误:', e);
-            clearTimeout(connectionTimeout);
-            this._stopHeartbeat();
-        };
-        
-        this._socket = ws;
+            ws.onclose = e => {
+                clearTimeout(connectionTimeout);
+                this._stopHeartbeat();
+                this._onDisconnect();
+            };
+            
+            ws.onerror = e => {
+                console.error('WS错误:', e);
+                clearTimeout(connectionTimeout);
+                this._stopHeartbeat();
+            };
+            
+            this._socket = ws;
+        });
     }
 
     _onMessage(msg) {
@@ -89,6 +154,9 @@ class ServerConnection {
                 break;
             case 'peer-left':
                 Events.fire('peer-left', msg.peerId);
+                break;
+            case 'peer-updated':
+                Events.fire('peer-updated', msg.peer);
                 break;
             case 'signal':
                 Events.fire('signal', msg);

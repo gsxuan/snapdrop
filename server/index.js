@@ -191,6 +191,46 @@ class SnapdropServer {
             case 'pong':
                 sender.lastBeat = Date.now();
                 break;
+            case 'user-info':
+                // 处理用户信息更新
+                if (message.userName || message.deviceName) {
+                    log(`收到用户 ${sender.id} 的信息更新请求`);
+                    
+                    let displayNameUpdated = false;
+                    
+                    // 更新用户名
+                    if (message.userName) {
+                        sender.userProvidedName = message.userName;
+                        sender.name.displayName = message.userName;
+                        displayNameUpdated = true;
+                        log(`用户 ${sender.id} 更新名称为: ${message.userName}`);
+                    }
+                    
+                    // 更新设备信息
+                    if (message.deviceName && message.model) {
+                        sender.name.deviceName = `${message.deviceName} ${message.model}`;
+                        log(`用户 ${sender.id} 更新设备信息为: ${sender.name.deviceName}`);
+                    } else if (message.deviceName) {
+                        sender.name.deviceName = message.deviceName;
+                        log(`用户 ${sender.id} 更新设备信息为: ${message.deviceName}`);
+                    }
+                    
+                    // 如果有更新，通知用户
+                    if (displayNameUpdated) {
+                        this._send(sender, {
+                            type: 'display-name',
+                            message: {
+                                displayName: sender.name.displayName,
+                                deviceName: sender.name.deviceName,
+                                peerId: sender.id
+                            }
+                        });
+                        
+                        // 通知其他用户此用户更新了名称
+                        this._notifyPeerUpdate(sender);
+                    }
+                }
+                break;
             case 'file':
             case 'file-chunk':
             case 'file-chunk-header':
@@ -399,6 +439,40 @@ class SnapdropServer {
             clearTimeout(peer.timerId);
         }
     }
+
+    _notifyPeerUpdate(updatedPeer) {
+        // 先通知IP房间中的设备
+        if (this._rooms[updatedPeer.ip]) {
+            for (const otherPeerId in this._rooms[updatedPeer.ip]) {
+                // 不要通知自己
+                if (otherPeerId === updatedPeer.id) continue;
+                
+                const otherPeer = this._rooms[updatedPeer.ip][otherPeerId];
+                this._send(otherPeer, { 
+                    type: 'peer-updated', 
+                    peer: updatedPeer.getInfo() 
+                });
+            }
+        }
+        
+        // 再通知全局房间中的设备
+        const globalRoomId = 'global';
+        if (this._rooms[globalRoomId]) {
+            for (const otherPeerId in this._rooms[globalRoomId]) {
+                // 不要通知自己，也不要重复通知IP房间中已通知的设备
+                if (otherPeerId === updatedPeer.id || 
+                    (this._rooms[updatedPeer.ip] && this._rooms[updatedPeer.ip][otherPeerId])) {
+                    continue;
+                }
+                
+                const otherPeer = this._rooms[globalRoomId][otherPeerId];
+                this._send(otherPeer, { 
+                    type: 'peer-updated', 
+                    peer: updatedPeer.getInfo() 
+                });
+            }
+        }
+    }
 }
 
 
@@ -530,12 +604,31 @@ class Peer {
         if(!deviceName)
             deviceName = '未知设备';
 
-        // 使用中文名称
-        // 使用完整的ID（包括设备指纹）来计算哈希，确保名称唯一性
-        const fullId = this.id || '';
-        const colorIndex = Math.abs(fullId.hashCode() % chineseColors.length);
-        const animalIndex = Math.abs((fullId.hashCode() >> 4) % chineseAnimals.length);
-        const displayName = chineseColors[colorIndex] + chineseAnimals[animalIndex];
+        // 尝试获取用户名称
+        let displayName = '';
+        
+        // 尝试从请求头获取用户名信息
+        if (req.headers['x-user-name']) {
+            displayName = req.headers['x-user-name'];
+            log(`使用请求头中的用户名: ${displayName}`);
+        }
+        
+        // 如果没有找到用户名，则检查是否有来自客户端提供的名称
+        if (!displayName && req.headers['x-device-name']) {
+            displayName = req.headers['x-device-name'];
+            log(`使用请求头中的设备名称: ${displayName}`);
+        }
+        
+        // 如果仍未找到，则使用随机生成的中文名称
+        if (!displayName) {
+            // 使用中文名称
+            // 使用完整的ID（包括设备指纹）来计算哈希，确保名称唯一性
+            const fullId = this.id || '';
+            const colorIndex = Math.abs(fullId.hashCode() % chineseColors.length);
+            const animalIndex = Math.abs((fullId.hashCode() >> 4) % chineseAnimals.length);
+            displayName = chineseColors[colorIndex] + chineseAnimals[animalIndex];
+            log(`使用随机生成的名称: ${displayName}`);
+        }
 
         this.name = {
             model: ua.device.model,
