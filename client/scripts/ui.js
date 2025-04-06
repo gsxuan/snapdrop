@@ -40,6 +40,22 @@ Events.on('display-name', e => {
 // 页面加载完成后初始化版本号显示
 document.addEventListener('DOMContentLoaded', () => {
     // 版本号代码已移除
+    
+    // 添加更新动画样式
+    const style = document.createElement('style');
+    style.textContent = `
+        x-peer.updated .name {
+            animation: highlight-update 2s ease-in-out;
+        }
+        
+        @keyframes highlight-update {
+            0% { color: inherit; }
+            30% { color: #2196F3; }
+            70% { color: #2196F3; }
+            100% { color: inherit; }
+        }
+    `;
+    document.head.appendChild(style);
 });
 
 class PeersUI {
@@ -100,22 +116,41 @@ class PeersUI {
     }
 
     _onPeerUpdated(peer) {
+        console.log(`收到设备 ${peer.id} 的信息更新`, peer);
+        
         const $peer = $(peer.id);
-        if (!$peer) return;
+        if (!$peer) {
+            console.warn(`无法找到ID为 ${peer.id} 的设备DOM元素`);
+            return;
+        }
         
         // 更新显示名称
         const $name = $peer.querySelector('.name');
         if ($name) {
+            const oldName = $name.textContent;
             $name.textContent = peer.name.displayName;
+            console.log(`设备 ${peer.id} 名称从 "${oldName}" 更新为 "${peer.name.displayName}"`);
+        } else {
+            console.warn(`无法找到设备 ${peer.id} 的名称DOM元素`);
         }
         
         // 更新设备名称
         const $deviceName = $peer.querySelector('.device-name');
         if ($deviceName) {
+            const oldDeviceName = $deviceName.textContent;
             $deviceName.textContent = peer.name.deviceName;
+            console.log(`设备 ${peer.id} 设备名称从 "${oldDeviceName}" 更新为 "${peer.name.deviceName}"`);
+        } else {
+            console.warn(`无法找到设备 ${peer.id} 的设备名称DOM元素`);
         }
         
-        console.log(`设备 ${peer.id} 信息已更新`);
+        // 触发UI更新动画或其他视觉反馈
+        $peer.classList.add('updated');
+        setTimeout(() => {
+            $peer.classList.remove('updated');
+        }, 2000);
+        
+        console.log(`设备 ${peer.id} 信息更新完成`);
     }
 }
 

@@ -454,6 +454,8 @@ class SnapdropServer {
     }
 
     _notifyPeerUpdate(updatedPeer) {
+        log(`开始通知其他设备 ${updatedPeer.id} 的名称已更新为 ${updatedPeer.name.displayName}`);
+        
         // 先通知IP房间中的设备
         if (this._rooms[updatedPeer.ip]) {
             for (const otherPeerId in this._rooms[updatedPeer.ip]) {
@@ -461,6 +463,7 @@ class SnapdropServer {
                 if (otherPeerId === updatedPeer.id) continue;
                 
                 const otherPeer = this._rooms[updatedPeer.ip][otherPeerId];
+                log(`通知IP房间内设备 ${otherPeerId} 关于 ${updatedPeer.id} 的名称更新`);
                 this._send(otherPeer, { 
                     type: 'peer-updated', 
                     peer: updatedPeer.getInfo() 
@@ -479,12 +482,16 @@ class SnapdropServer {
                 }
                 
                 const otherPeer = this._rooms[globalRoomId][otherPeerId];
+                log(`通知全局房间内设备 ${otherPeerId} 关于 ${updatedPeer.id} 的名称更新`);
                 this._send(otherPeer, { 
                     type: 'peer-updated', 
                     peer: updatedPeer.getInfo() 
                 });
             }
         }
+        
+        // 检查所有房间是否还有其他设备需要通知
+        log(`已完成通知设备 ${updatedPeer.id} 的名称更新`);
     }
 }
 
